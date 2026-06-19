@@ -18,7 +18,9 @@ pub struct Account {
     pub id: String,
     /// "drive" or "dropbox".
     pub provider: String,
-    /// Human-readable label (slug form is used as a display fallback).
+    /// The slug reconstructed from the remote name (e.g. "client_a"). This is
+    /// always the sanitized slug form, NOT the user's original label — the
+    /// original capitalization/spacing is not stored and cannot be recovered.
     pub label: String,
 }
 
@@ -124,10 +126,12 @@ pub fn config_create_args(
 /// List all configured accounts by reading rclone's remote list.
 #[tauri::command]
 pub fn list_accounts(state: tauri::State<RcloneState>) -> Result<Vec<Account>, String> {
+    // Recover from a poisoned lock (matches supervisor.rs) so a single panic
+    // elsewhere doesn't permanently brick this command.
     let conn = state
         .connection
         .lock()
-        .map_err(|e| e.to_string())?
+        .unwrap_or_else(|e| e.into_inner())
         .clone()
         .ok_or_else(|| "rclone not started".to_string())?;
     let resp = rc_post(&conn, "config/listremotes", &serde_json::json!({}))?;
@@ -145,10 +149,11 @@ pub fn list_accounts(state: tauri::State<RcloneState>) -> Result<Vec<Account>, S
 /// Remove an account by deleting its rclone remote.
 #[tauri::command]
 pub fn remove_account(state: tauri::State<RcloneState>, id: String) -> Result<(), String> {
+    // Recover from a poisoned lock (matches supervisor.rs).
     let conn = state
         .connection
         .lock()
-        .map_err(|e| e.to_string())?
+        .unwrap_or_else(|e| e.into_inner())
         .clone()
         .ok_or_else(|| "rclone not started".to_string())?;
     rc_post(&conn, "config/delete", &serde_json::json!({ "name": id }))?;
@@ -188,7 +193,7 @@ pub async fn add_account(
     let args = config_create_args(&config_path, &remote, &provider, &client_id, &client_secret);
 
     // Spawn the sidecar as a ONE-SHOT (not the daemon) and wait for it to exit.
-    let (mut rx, _child) = app
+    let (mut rx, child) = app
         .shell()
         .sidecar("rclone")
         .map_err(|e| format!("sidecar: {e}"))?
@@ -198,7 +203,9 @@ pub async fn add_account(
 
     // Drain events until Terminated, accumulating stderr for error reporting.
     // OAuth needs the user to interact with a browser, so allow a generous
-    // timeout; on timeout we bail and the spawned child is killed on drop.
+    // timeout. NOTE: tauri-plugin-shell's CommandChild does NOT kill the process
+    // on drop, so on timeout we must kill it explicitly (below) to avoid leaking
+    // an orphaned rclone holding the OAuth callback port.
     let mut stderr = String::new();
     let collect = async {
         while let Some(event) = rx.recv().await {
@@ -222,9 +229,17 @@ pub async fn add_account(
         None
     };
 
-    let code = tokio::time::timeout(OAUTH_TIMEOUT, collect)
-        .await
-        .map_err(|_| format!("rclone config create timed out after {OAUTH_TIMEOUT:?}: {stderr}"))?;
+    let code = match tokio::time::timeout(OAUTH_TIMEOUT, collect).await {
+        Ok(code) => code,
+        Err(_) => {
+            // Timed out: kill the orphaned child (kill consumes it) before
+            // returning, since CommandChild has no Drop kill.
+            let _ = child.kill();
+            return Err(format!(
+                "rclone config create timed out after {OAUTH_TIMEOUT:?}"
+            ));
+        }
+    };
 
     match code {
         Some(0) => parse_remote(&remote).ok_or_else(|| format!("invalid remote name: {remote}")),
