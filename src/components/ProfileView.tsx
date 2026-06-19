@@ -13,6 +13,7 @@ import {
 import { open } from "@tauri-apps/plugin-dialog";
 import { useApp } from "../store/app";
 import { useIndex } from "../store/index-store";
+import { useBrowse, browseKey } from "../store/browse";
 import { useTransfers } from "../store/transfers";
 import { useToasts } from "../store/toast";
 import { SidebarTree } from "./SidebarTree";
@@ -41,7 +42,20 @@ export function ProfileView({ id }: { id: string }) {
 
   const index = entry?.index ?? null;
   const status = entry?.status ?? "idle";
-  const items = (index?.tree[path] ?? EMPTY) as RcItem[];
+
+  // Prefer the cached index; fall back to a live listing for any folder the
+  // crawl didn't capture (e.g. a huge/failed subtree) so it's always browseable.
+  const indexItems = index?.tree[path];
+  const liveItems = useBrowse((s) => (account ? s.listings[browseKey(account.id, path)] : undefined));
+  const liveLoading = useBrowse((s) => (account ? s.loading[browseKey(account.id, path)] : false)) ?? false;
+  const usingIndex = !!(indexItems && indexItems.length);
+  const items = (usingIndex ? indexItems : liveItems ?? EMPTY) as RcItem[];
+
+  useEffect(() => {
+    if (account && status === "ready" && (!indexItems || indexItems.length === 0)) {
+      void useBrowse.getState().ensure(account, path);
+    }
+  }, [account, status, path, indexItems]);
 
   const aggOf = (p: string) => index?.agg[p];
   const sizeOf = (item: RcItem): number => (item.IsDir ? (aggOf(item.Path)?.size ?? 0) : Math.max(0, item.Size));
@@ -228,9 +242,9 @@ export function ProfileView({ id }: { id: string }) {
             </div>
           )}
 
-          {!index && status !== "error" ? (
+          {(!index && status !== "error") || (!usingIndex && liveLoading && items.length === 0) ? (
             <div className="flex items-center gap-2 py-12 text-sm text-[var(--text-2)]">
-              <Loader2 className="animate-spin" size={16} /> Indexing…
+              <Loader2 className="animate-spin" size={16} /> {index ? "Loading…" : "Indexing…"}
             </div>
           ) : filtered.length === 0 ? (
             <div className="py-12 text-sm text-[var(--text-2)]">{query ? "No matches." : "This folder is empty."}</div>

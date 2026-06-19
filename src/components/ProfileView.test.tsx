@@ -9,6 +9,7 @@ import { ProfileView } from "./ProfileView";
 import { useApp } from "../store/app";
 import { useTransfers } from "../store/transfers";
 import { useIndex } from "../store/index-store";
+import { useBrowse } from "../store/browse";
 import { buildIndex } from "../lib/account-index";
 import type { Account } from "../lib/tauri/commands";
 import type { RcItem } from "../lib/rc/browse";
@@ -32,6 +33,7 @@ beforeEach(() => {
   useIndex.setState({
     byAccount: { drive_x: { status: "ready", progress: { done: 0, total: 0 }, index: buildIndex(flat, 0) } },
   });
+  useBrowse.setState({ listings: {}, loading: {}, errors: {}, sizes: {} });
   invokeMock.mockImplementation((cmd: string) => {
     if (cmd === "start_download") return Promise.resolve([]);
     if (cmd === "list_jobs") return Promise.resolve([]);

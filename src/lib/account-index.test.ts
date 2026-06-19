@@ -1,6 +1,11 @@
-import { describe, it, expect } from "vitest";
-import { buildIndex } from "./account-index";
+import { describe, it, expect, vi } from "vitest";
+
+const invokeMock = vi.fn();
+vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invokeMock(...a) }));
+
+import { buildIndex, crawlAccount } from "./account-index";
 import type { RcItem } from "./rc/browse";
+import type { Account } from "./tauri/commands";
 
 function f(path: string, size: number, mod: string): RcItem {
   return { Name: path.split("/").pop()!, Path: path, Size: size, IsDir: false, ModTime: mod, MimeType: "" };
@@ -31,5 +36,28 @@ describe("buildIndex", () => {
     expect(idx.agg["A"].fileCount).toBe(2);
     expect(idx.agg["A/sub"].size).toBe(1000);
     expect(idx.crawledAt).toBe(123);
+  });
+});
+
+describe("crawlAccount", () => {
+  it("does not double-prefix paths that rclone already returns root-relative", async () => {
+    invokeMock.mockImplementation((_cmd: string, args?: { endpoint?: string; params?: { opt?: { recurse?: boolean } } }) => {
+      if (args?.endpoint === "operations/list") {
+        if (args.params?.opt?.recurse) {
+          // rclone's recursive list returns full, root-relative paths
+          return Promise.resolve({
+            list: [{ Name: "clip.mxf", Path: "A/clip.mxf", Size: 100, IsDir: false, ModTime: "2026-01-01T00:00:00Z", MimeType: "" }],
+          });
+        }
+        return Promise.resolve({ list: [{ Name: "A", Path: "A", Size: -1, IsDir: true, ModTime: "", MimeType: "" }] });
+      }
+      return Promise.resolve({});
+    });
+
+    const account: Account = { id: "drive_x", provider: "drive", label: "x" };
+    const flat = await crawlAccount(account, () => {});
+    const paths = flat.map((i) => i.Path);
+    expect(paths).toContain("A/clip.mxf");
+    expect(paths).not.toContain("A/A/clip.mxf");
   });
 });

@@ -15,6 +15,10 @@ export interface AccountIndex {
   crawledAt: number;
 }
 
+// Bump when the crawl/index format changes so stale on-disk caches are discarded
+// and re-crawled automatically. v2: fixed path double-prefixing.
+const INDEX_VERSION = 2;
+
 function sortItems(items: RcItem[]): RcItem[] {
   return items.sort((a, b) => {
     if (a.IsDir !== b.IsDir) return a.IsDir ? -1 : 1;
@@ -104,8 +108,23 @@ export async function crawlAccount(
     rootDirs,
     5,
     async (dir) => {
-      const sub = await listRecurse(account, dir.Path);
-      for (const it of sub) flat.push({ ...it, Path: `${dir.Path}/${it.Path}` });
+      // Retry a flaky/large subtree once before giving up.
+      let sub: RcItem[] = [];
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          sub = await listRecurse(account, dir.Path);
+          break;
+        } catch (e) {
+          if (attempt === 1) throw e;
+        }
+      }
+      const prefix = `${dir.Path}/`;
+      for (const it of sub) {
+        // rclone's recursive list already returns root-relative paths; only
+        // prefix if it didn't (be robust to either behaviour, never double up).
+        const full = it.Path === dir.Path || it.Path.startsWith(prefix) ? it.Path : prefix + it.Path;
+        flat.push({ ...it, Path: full });
+      }
     },
     (done) => onProgress(done, rootDirs.length),
   );
@@ -120,7 +139,7 @@ export async function crawlAndSave(
   crawledAt: number,
 ): Promise<AccountIndex> {
   const flat = await crawlAccount(account, onProgress);
-  await saveIndex(account.id, JSON.stringify({ flat, crawledAt })).catch(() => {});
+  await saveIndex(account.id, JSON.stringify({ version: INDEX_VERSION, flat, crawledAt })).catch(() => {});
   return buildIndex(flat, crawledAt);
 }
 
@@ -129,7 +148,8 @@ export async function loadCachedIndex(accountId: string): Promise<AccountIndex |
   const raw = await loadIndex(accountId).catch(() => null);
   if (!raw) return null;
   try {
-    const parsed = JSON.parse(raw) as { flat: RcItem[]; crawledAt: number };
+    const parsed = JSON.parse(raw) as { version?: number; flat: RcItem[]; crawledAt: number };
+    if (parsed.version !== INDEX_VERSION) return null; // stale format → re-crawl
     return buildIndex(parsed.flat ?? [], parsed.crawledAt ?? 0);
   } catch {
     return null;
