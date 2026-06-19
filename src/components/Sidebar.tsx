@@ -22,6 +22,7 @@ export function Sidebar() {
   const storage = useStorage((s) => s.byAccount);
   const fetchStorage = useStorage((s) => s.fetch);
   const meta = useAccountMeta((s) => s.byId);
+  const emailErrors = useAccountMeta((s) => s.errors);
   const fetchEmail = useAccountMeta((s) => s.fetchEmail);
   const [addProvider, setAddProvider] = useState<Provider | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -98,8 +99,23 @@ export function Sidebar() {
                     <div className="truncate text-sm font-medium text-[var(--text)]">
                       {meta[a.id]?.label ?? prettyLabel(a.label)}
                     </div>
-                    <div className="truncate text-xs text-[var(--text-3)]" title={meta[a.id]?.email}>
-                      {meta[a.id]?.email ?? providerName(a.provider)}
+                    <div className="flex items-center gap-1.5 text-xs text-[var(--text-3)]">
+                      <span className="truncate" title={meta[a.id]?.email}>
+                        {meta[a.id]?.email ?? providerName(a.provider)}
+                      </span>
+                      {!meta[a.id]?.email && emailErrors[a.id] && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void fetchEmail(a.id, true);
+                          }}
+                          title={emailErrors[a.id]}
+                          aria-label="Email lookup failed — retry"
+                          className="shrink-0 text-[var(--warning)] hover:text-[var(--text)]"
+                        >
+                          <AlertCircle size={12} />
+                        </button>
+                      )}
                     </div>
                   </div>
                   <button
