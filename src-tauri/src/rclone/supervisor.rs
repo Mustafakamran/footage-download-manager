@@ -21,11 +21,20 @@ pub struct RcloneState {
 /// Launch the rclone sidecar in rc daemon mode and wait until it answers.
 pub fn start_rclone(app: &AppHandle) -> Result<RcConnection, String> {
     let port = pick_free_port().map_err(|e| format!("port: {e}"))?;
+    // Use a fixed config file in the app data dir so remotes/tokens persist
+    // across restarts. Create the dir if it doesn't exist yet.
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app_data_dir: {e}"))?;
+    std::fs::create_dir_all(&data_dir).map_err(|e| format!("create app_data_dir: {e}"))?;
+    let config_path = data_dir.join("rclone.conf").to_string_lossy().into_owned();
     let cfg = RcConfig {
         host: "127.0.0.1".into(),
         port,
         user: random_secret(16),
         pass: random_secret(32),
+        config_path,
     };
     let args = build_rcd_args(&cfg);
 

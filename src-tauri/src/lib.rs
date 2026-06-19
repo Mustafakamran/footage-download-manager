@@ -1,4 +1,6 @@
+pub mod accounts;
 pub mod rclone;
+pub mod secrets;
 
 use rclone::supervisor::{start_rclone, stop_rclone, RcloneState};
 use tauri::Manager;
@@ -23,7 +25,15 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(RcloneState::default())
-        .invoke_handler(tauri::generate_handler![rc_call])
+        .invoke_handler(tauri::generate_handler![
+            rc_call,
+            accounts::list_accounts,
+            accounts::remove_account,
+            accounts::add_account,
+            accounts::set_secret,
+            accounts::get_secret,
+            accounts::delete_secret,
+        ])
         .setup(|app| {
             let handle = app.handle().clone();
             start_rclone(&handle).map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;

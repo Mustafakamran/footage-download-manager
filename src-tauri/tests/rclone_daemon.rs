@@ -35,6 +35,13 @@ fn find_rclone_binary() -> Option<PathBuf> {
     None
 }
 
+/// Build a unique temp path for an rclone config file so tests never touch the
+/// user's real config. The file need not pre-exist; rclone creates it on write.
+fn temp_config_path(tag: &str) -> PathBuf {
+    let name = format!("rclone-test-{}-{}.conf", tag, std::process::id());
+    std::env::temp_dir().join(name)
+}
+
 #[test]
 fn rclone_daemon_answers_core_version() {
     let binary = match find_rclone_binary() {
@@ -46,11 +53,13 @@ fn rclone_daemon_answers_core_version() {
     };
 
     let port = pick_free_port().expect("pick a free port");
+    let config_path = temp_config_path("core_version");
     let cfg = RcConfig {
         host: "127.0.0.1".into(),
         port,
         user: "testuser".into(),
         pass: "testpass".into(),
+        config_path: config_path.to_string_lossy().into_owned(),
     };
     let args = build_rcd_args(&cfg);
 
@@ -99,4 +108,64 @@ fn rclone_daemon_answers_core_version() {
         json.get("version").is_some(),
         "rc_post core/version JSON should contain a \"version\" field, got: {json}"
     );
+}
+
+/// Proves the `--config <path>` wiring end-to-end: spawn the daemon against a
+/// fresh temp config and assert `config/listremotes` returns an empty/clean
+/// list. This exercises the list path the `list_accounts` command relies on,
+/// without needing OAuth or real credentials.
+#[test]
+fn rclone_daemon_listremotes_empty_with_temp_config() {
+    let binary = match find_rclone_binary() {
+        Some(p) => p,
+        None => {
+            eprintln!("SKIP: no rclone binary found under binaries/rclone-* — skipping test");
+            return;
+        }
+    };
+
+    // A fresh temp config that doesn't exist yet → no remotes configured.
+    let config_path = temp_config_path("listremotes");
+    let _ = std::fs::remove_file(&config_path);
+
+    let port = pick_free_port().expect("pick a free port");
+    let cfg = RcConfig {
+        host: "127.0.0.1".into(),
+        port,
+        user: "testuser".into(),
+        pass: "testpass".into(),
+        config_path: config_path.to_string_lossy().into_owned(),
+    };
+    let args = build_rcd_args(&cfg);
+
+    let child = Command::new(&binary)
+        .args(&args)
+        .spawn()
+        .expect("spawn rclone rcd");
+    let _guard = ChildGuard(child);
+
+    let connection = RcConnection {
+        base_url: format!("http://{}:{}", cfg.host, cfg.port),
+        user: cfg.user.clone(),
+        pass: cfg.pass.clone(),
+    };
+
+    wait_until_ready(&connection).expect("rclone daemon became ready");
+
+    let json = rc_post(&connection, "config/listremotes", &serde_json::json!({}))
+        .expect("rc_post config/listremotes");
+    eprintln!("config/listremotes response: {json}");
+
+    // A fresh config has no remotes. rclone reports this as either a `null`
+    // "remotes" value or an empty array — `list_accounts` treats both as []. We
+    // assert the same: the array form must be empty if present.
+    let remotes = json.get("remotes").expect("response has a \"remotes\" key");
+    let empty = remotes.is_null() || remotes.as_array().is_some_and(|a| a.is_empty());
+    assert!(
+        empty,
+        "fresh temp config should have no remotes, got: {remotes}"
+    );
+
+    // Cleanup the temp config if rclone created it.
+    let _ = std::fs::remove_file(&config_path);
 }

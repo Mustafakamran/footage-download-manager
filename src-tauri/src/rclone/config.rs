@@ -6,6 +6,8 @@ pub struct RcConfig {
     pub port: u16,
     pub user: String,
     pub pass: String,
+    /// Absolute path to the rclone config file so remotes/tokens persist.
+    pub config_path: String,
 }
 
 /// Build the argument vector for `rclone rcd`.
@@ -18,6 +20,8 @@ pub fn build_rcd_args(cfg: &RcConfig) -> Vec<String> {
         cfg.user.clone(),
         "--rc-pass".into(),
         cfg.pass.clone(),
+        "--config".into(),
+        cfg.config_path.clone(),
     ]
 }
 
@@ -51,6 +55,7 @@ mod tests {
             port: 5572,
             user: "u".into(),
             pass: "p".into(),
+            config_path: "/tmp/rclone.conf".into(),
         };
         let args = build_rcd_args(&cfg);
         assert_eq!(args[0], "rcd");
@@ -60,6 +65,8 @@ mod tests {
         assert!(args.contains(&"u".to_string()));
         assert!(args.contains(&"--rc-pass".to_string()));
         assert!(args.contains(&"p".to_string()));
+        assert!(args.contains(&"--config".to_string()));
+        assert!(args.contains(&"/tmp/rclone.conf".to_string()));
     }
 }
 
