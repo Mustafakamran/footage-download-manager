@@ -29,6 +29,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(RcloneState::default())
         .manage(JobsState::default())
+        .manage(accounts::OAuthState::default())
         .invoke_handler(tauri::generate_handler![
             rc_call,
             accounts::list_accounts,

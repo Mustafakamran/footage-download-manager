@@ -7,9 +7,18 @@
 
 use crate::rclone::supervisor::{rc_post, RcloneState};
 use serde::{Deserialize, Serialize};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
-use tauri_plugin_shell::{process::CommandEvent, ShellExt};
+use tauri_plugin_shell::{
+    process::{CommandChild, CommandEvent},
+    ShellExt,
+};
+
+/// Tracks the in-flight OAuth (`rclone config create`) child so a new connect
+/// attempt can kill a previous one still holding the loopback auth port (53682).
+#[derive(Default, Clone)]
+pub struct OAuthState(pub Arc<Mutex<Option<CommandChild>>>);
 
 /// A cloud account, derived from an rclone remote.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
@@ -174,6 +183,7 @@ const OAUTH_TIMEOUT: Duration = Duration::from_secs(300);
 #[tauri::command]
 pub async fn add_account(
     app: AppHandle,
+    oauth: tauri::State<'_, OAuthState>,
     provider: String,
     label: String,
     client_id: String,
@@ -182,6 +192,8 @@ pub async fn add_account(
     if !PROVIDERS.contains(&provider.as_str()) {
         return Err(format!("unknown provider: {provider}"));
     }
+    // Own the Arc so we don't hold the State borrow across await points.
+    let oauth = oauth.inner().clone();
     let remote = remote_name(&provider, &label);
 
     // Same persistent config file the daemon uses (see start_rclone).
@@ -194,6 +206,16 @@ pub async fn add_account(
 
     let args = config_create_args(&config_path, &remote, &provider, &client_id, &client_secret);
 
+    // Kill any previous in-flight OAuth attempt still holding the loopback auth
+    // port (53682), then give the OS a moment to release it. Without this, a
+    // second connect fails with "address already in use". Scope the lock so the
+    // MutexGuard is dropped before the await (keeps the future Send).
+    let prev = oauth.0.lock().unwrap_or_else(|e| e.into_inner()).take();
+    if let Some(prev) = prev {
+        let _ = prev.kill();
+        tokio::time::sleep(Duration::from_millis(400)).await;
+    }
+
     // Spawn the sidecar as a ONE-SHOT (not the daemon) and wait for it to exit.
     let (mut rx, child) = app
         .shell()
@@ -203,11 +225,11 @@ pub async fn add_account(
         .spawn()
         .map_err(|e| format!("spawn: {e}"))?;
 
+    // Track the live child so a later connect (or timeout) can kill it.
+    // tauri-plugin-shell's CommandChild does NOT kill on drop.
+    *oauth.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(child);
+
     // Drain events until Terminated, accumulating stderr for error reporting.
-    // OAuth needs the user to interact with a browser, so allow a generous
-    // timeout. NOTE: tauri-plugin-shell's CommandChild does NOT kill the process
-    // on drop, so on timeout we must kill it explicitly (below) to avoid leaking
-    // an orphaned rclone holding the OAuth callback port.
     let mut stderr = String::new();
     let collect = async {
         while let Some(event) = rx.recv().await {
@@ -234,14 +256,18 @@ pub async fn add_account(
     let code = match tokio::time::timeout(OAUTH_TIMEOUT, collect).await {
         Ok(code) => code,
         Err(_) => {
-            // Timed out: kill the orphaned child (kill consumes it) before
-            // returning, since CommandChild has no Drop kill.
-            let _ = child.kill();
+            // Timed out: kill the tracked child (kill consumes it).
+            if let Some(c) = oauth.0.lock().unwrap_or_else(|e| e.into_inner()).take() {
+                let _ = c.kill();
+            }
             return Err(format!(
                 "rclone config create timed out after {OAUTH_TIMEOUT:?}"
             ));
         }
     };
+
+    // Process exited on its own; drop the now-dead handle.
+    let _ = oauth.0.lock().unwrap_or_else(|e| e.into_inner()).take();
 
     match code {
         Some(0) => parse_remote(&remote).ok_or_else(|| format!("invalid remote name: {remote}")),
