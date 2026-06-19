@@ -1,30 +1,22 @@
 import { useState } from "react";
 import { ChevronRight, ChevronDown, Folder, Home } from "lucide-react";
-import { useBrowse, browseKey } from "../store/browse";
+import { useIndex } from "../store/index-store";
 import type { Account } from "../lib/tauri/commands";
-import type { RcItem } from "../lib/rc/browse";
-
-const EMPTY: RcItem[] = [];
+import type { AccountIndex } from "../lib/account-index";
 
 interface NodeProps {
-  account: Account;
-  dir: RcItem;
+  index: AccountIndex;
+  dirPath: string;
+  dirName: string;
   depth: number;
   currentPath: string;
   onNavigate: (path: string) => void;
 }
 
-function TreeNode({ account, dir, depth, currentPath, onNavigate }: NodeProps) {
+function TreeNode({ index, dirPath, dirName, depth, currentPath, onNavigate }: NodeProps) {
   const [open, setOpen] = useState(false);
-  const children = useBrowse((s) => s.listings[browseKey(account.id, dir.Path)]) ?? EMPTY;
-  const childDirs = children.filter((c) => c.IsDir);
-  const active = currentPath === dir.Path;
-
-  function toggleExpand() {
-    const next = !open;
-    setOpen(next);
-    if (next) void useBrowse.getState().ensure(account, dir.Path);
-  }
+  const childDirs = (index.tree[dirPath] ?? []).filter((c) => c.IsDir);
+  const active = currentPath === dirPath;
 
   return (
     <div>
@@ -34,23 +26,25 @@ function TreeNode({ account, dir, depth, currentPath, onNavigate }: NodeProps) {
         }`}
         style={{ paddingLeft: depth * 12 + 2 }}
       >
-        <button onClick={toggleExpand} className="p-1 text-[var(--text-3)] hover:text-[var(--text)]" aria-label="Expand">
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className={`p-1 ${childDirs.length ? "text-[var(--text-3)] hover:text-[var(--text)]" : "invisible"}`}
+          aria-label="Expand"
+        >
           {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
         </button>
-        <button
-          onClick={() => onNavigate(dir.Path)}
-          className="flex min-w-0 flex-1 items-center gap-2 py-1.5 text-sm"
-        >
+        <button onClick={() => onNavigate(dirPath)} className="flex min-w-0 flex-1 items-center gap-2 py-1.5 text-sm">
           <Folder size={15} className="shrink-0 text-[var(--accent)]" />
-          <span className="truncate">{dir.Name}</span>
+          <span className="truncate">{dirName}</span>
         </button>
       </div>
       {open &&
         childDirs.map((c) => (
           <TreeNode
             key={c.Path}
-            account={account}
-            dir={c}
+            index={index}
+            dirPath={c.Path}
+            dirName={c.Name}
             depth={depth + 1}
             currentPath={currentPath}
             onNavigate={onNavigate}
@@ -69,8 +63,8 @@ export function SidebarTree({
   currentPath: string;
   onNavigate: (path: string) => void;
 }) {
-  const roots = useBrowse((s) => s.listings[browseKey(account.id, "")]) ?? EMPTY;
-  const rootDirs = roots.filter((d) => d.IsDir);
+  const index = useIndex((s) => s.byAccount[account.id]?.index);
+  const rootDirs = (index?.tree[""] ?? []).filter((d) => d.IsDir);
   const homeLabel = account.provider === "drive" ? "Shared with me" : "Home";
 
   return (
@@ -84,9 +78,18 @@ export function SidebarTree({
       >
         <Home size={14} className="text-[var(--accent)]" /> {homeLabel}
       </button>
-      {rootDirs.map((d) => (
-        <TreeNode key={d.Path} account={account} dir={d} depth={0} currentPath={currentPath} onNavigate={onNavigate} />
-      ))}
+      {index &&
+        rootDirs.map((d) => (
+          <TreeNode
+            key={d.Path}
+            index={index}
+            dirPath={d.Path}
+            dirName={d.Name}
+            depth={0}
+            currentPath={currentPath}
+            onNavigate={onNavigate}
+          />
+        ))}
     </aside>
   );
 }

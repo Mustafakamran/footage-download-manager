@@ -108,3 +108,18 @@ export function clearFinishedJobs(): Promise<void> {
 export function driveUploader(accountId: string, fileId: string): Promise<string | null> {
   return invoke<string | null>("drive_uploader", { accountId, fileId });
 }
+
+/** Persist an account's crawled index JSON to local disk. */
+export function saveIndex(accountId: string, data: string): Promise<void> {
+  return invoke("save_index", { accountId, data });
+}
+
+/** Load an account's cached index JSON (null if never crawled). */
+export function loadIndex(accountId: string): Promise<string | null> {
+  return invoke<string | null>("load_index", { accountId });
+}
+
+/** Delete an account's cached index. */
+export function deleteIndex(accountId: string): Promise<void> {
+  return invoke("delete_index", { accountId });
+}

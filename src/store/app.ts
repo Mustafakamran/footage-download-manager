@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { listAccounts, removeAccount, type Account } from "../lib/tauri/commands";
+import { useIndex } from "./index-store";
 
 export type View =
   | { kind: "accounts" }
@@ -55,6 +56,7 @@ export const useApp = create<AppState>((set, get) => ({
 
   removeAccount: async (id) => {
     await removeAccount(id);
+    await useIndex.getState().remove(id);
     get().closeTab(id);
     await get().loadAccounts();
   },

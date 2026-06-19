@@ -1,6 +1,7 @@
 pub mod accounts;
 pub mod download;
 pub mod drive;
+pub mod index_store;
 pub mod rclone;
 pub mod secrets;
 
@@ -45,6 +46,9 @@ pub fn run() {
             download::cancel_job,
             download::clear_finished_jobs,
             drive::drive_uploader,
+            index_store::save_index,
+            index_store::load_index,
+            index_store::delete_index,
         ])
         .setup(|app| {
             let handle = app.handle().clone();

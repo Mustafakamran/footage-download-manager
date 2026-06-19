@@ -8,29 +8,31 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 import { ProfileView } from "./ProfileView";
 import { useApp } from "../store/app";
 import { useTransfers } from "../store/transfers";
-import { useBrowse } from "../store/browse";
+import { useIndex } from "../store/index-store";
+import { buildIndex } from "../lib/account-index";
 import type { Account } from "../lib/tauri/commands";
+import type { RcItem } from "../lib/rc/browse";
 
 const account: Account = { id: "drive_x", provider: "drive", label: "x" };
 
-const folder = [
-  { Name: "FolderA", Path: "FolderA", Size: -1, IsDir: true, ModTime: "", MimeType: "inode/directory" },
-  { Name: "a.mxf", Path: "a.mxf", Size: 1000, IsDir: false, ModTime: "2026-01-02T00:00:00Z", MimeType: "video/mxf" },
-  { Name: "b.mxf", Path: "b.mxf", Size: 2000, IsDir: false, ModTime: "2026-01-03T00:00:00Z", MimeType: "video/mxf" },
-];
+function f(path: string, size: number): RcItem {
+  return { Name: path.split("/").pop()!, Path: path, Size: size, IsDir: false, ModTime: "2026-01-02T00:00:00Z", MimeType: "" };
+}
+function d(path: string): RcItem {
+  return { Name: path.split("/").pop()!, Path: path, Size: -1, IsDir: true, ModTime: "", MimeType: "" };
+}
+
+const flat = [d("FolderA"), f("FolderA/child.mxf", 5000), f("a.mxf", 1000), f("b.mxf", 2000)];
 
 beforeEach(() => {
   invokeMock.mockReset();
   localStorage.clear();
   useApp.setState({ accounts: [account], openTabs: ["drive_x"], view: { kind: "profile", id: "drive_x" } });
   useTransfers.setState({ jobs: [], dockOpen: true });
-  useBrowse.setState({ listings: {}, loading: {}, errors: {}, sizes: {} });
-  invokeMock.mockImplementation((cmd: string, args?: { params?: { remote?: string } }) => {
-    if (cmd === "rc_call") {
-      const remote = args?.params?.remote ?? "";
-      if (remote === "") return Promise.resolve({ list: folder });
-      return Promise.resolve({ list: [] });
-    }
+  useIndex.setState({
+    byAccount: { drive_x: { status: "ready", progress: { done: 0, total: 0 }, index: buildIndex(flat, 0) } },
+  });
+  invokeMock.mockImplementation((cmd: string) => {
     if (cmd === "start_download") return Promise.resolve([]);
     if (cmd === "list_jobs") return Promise.resolve([]);
     return Promise.resolve({});
@@ -42,41 +44,31 @@ afterEach(() => {
 });
 
 describe("ProfileView", () => {
-  it("renders items with sizes and computes the selection total", async () => {
+  it("renders the cached listing with sizes and a selection total", async () => {
     render(<ProfileView id="drive_x" />);
-
     const list = await screen.findByTestId("file-list");
-    await waitFor(() => expect(within(list).queryByText("a.mxf")).not.toBeNull());
+
+    expect(within(list).queryByText("a.mxf")).not.toBeNull();
     expect(within(list).queryByText("1000 B")).not.toBeNull();
-    expect(within(list).queryByText("2.0 KB")).not.toBeNull(); // 2000 B, KB uses 1 decimal
+    expect(within(list).queryByText("2.0 KB")).not.toBeNull();
 
     fireEvent.click(screen.getByLabelText("Select a.mxf"));
     fireEvent.click(screen.getByLabelText("Select b.mxf"));
-
-    // 1000 + 2000 = 3000 bytes -> 2.9 KB (KB = 1 decimal), shown in the selection bar
-    expect(screen.queryByText(/2\.9 KB/)).not.toBeNull();
-    expect(screen.queryByText(/Selected:/)).not.toBeNull();
+    expect(screen.queryByText(/2\.9 KB/)).not.toBeNull(); // 3000 B total in the selection bar
   });
 
-  it("navigates into a directory (lists with the dir path)", async () => {
+  it("navigates into a folder using the cached tree (no API call)", async () => {
     render(<ProfileView id="drive_x" />);
     const list = await screen.findByTestId("file-list");
-    await waitFor(() => expect(within(list).queryByText("FolderA")).not.toBeNull());
-
     fireEvent.click(within(list).getByText("FolderA"));
 
-    await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith(
-        "rc_call",
-        expect.objectContaining({ endpoint: "operations/list", params: expect.objectContaining({ remote: "FolderA" }) }),
-      );
-    });
+    await waitFor(() => expect(within(list).queryByText("child.mxf")).not.toBeNull());
   });
 
   it("downloads selected files to the default folder", async () => {
     localStorage.setItem("default_download_folder", "/Volumes/EXT");
     render(<ProfileView id="drive_x" />);
-    await waitFor(() => expect(screen.queryByText("a.mxf")).not.toBeNull());
+    await screen.findByTestId("file-list");
 
     fireEvent.click(screen.getByLabelText("Select a.mxf"));
     fireEvent.click(screen.getByText("Download"));

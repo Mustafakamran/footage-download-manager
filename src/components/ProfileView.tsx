@@ -9,11 +9,10 @@ import {
   List as ListIcon,
   LayoutGrid,
   RefreshCw,
-  Calculator,
 } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useApp } from "../store/app";
-import { useBrowse, browseKey, type SizeValue } from "../store/browse";
+import { useIndex } from "../store/index-store";
 import { useTransfers } from "../store/transfers";
 import { useToasts } from "../store/toast";
 import { SidebarTree } from "./SidebarTree";
@@ -27,6 +26,7 @@ const EMPTY: RcItem[] = [];
 
 export function ProfileView({ id }: { id: string }) {
   const account = useApp((s) => s.accounts.find((a) => a.id === id));
+  const entry = useIndex((s) => s.byAccount[id]);
   const startTransfer = useTransfers((s) => s.start);
   const toast = useToasts((s) => s.push);
 
@@ -35,50 +35,35 @@ export function ProfileView({ id }: { id: string }) {
   const [query, setQuery] = useState("");
   const [grid, setGrid] = useState(false);
 
-  const k = account ? browseKey(account.id, path) : "";
-  const items = useBrowse((s) => s.listings[k]) ?? EMPTY;
-  const loading = useBrowse((s) => s.loading[k]) ?? false;
-  const error = useBrowse((s) => s.errors[k]);
-  const sizes = useBrowse((s) => s.sizes);
-
   useEffect(() => {
-    if (!account) return;
-    setSelected(new Set());
-    void useBrowse.getState().ensure(account, path);
-  }, [account, path]);
+    if (account) void useIndex.getState().ensure(account);
+  }, [account]);
+
+  const index = entry?.index ?? null;
+  const status = entry?.status ?? "idle";
+  const items = (index?.tree[path] ?? EMPTY) as RcItem[];
+
+  const aggOf = (p: string) => index?.agg[p];
+  const sizeOf = (item: RcItem): number => (item.IsDir ? (aggOf(item.Path)?.size ?? 0) : Math.max(0, item.Size));
+  const dateOf = (item: RcItem): string => (item.IsDir ? (aggOf(item.Path)?.latest ?? "") : item.ModTime);
 
   const filtered = useMemo(
     () => (query ? items.filter((i) => i.Name.toLowerCase().includes(query.toLowerCase())) : items),
     [items, query],
   );
 
-  const sizeOf = (p: string): SizeValue | undefined =>
-    account ? sizes[browseKey(account.id, p)] : undefined;
-  const calc = (p: string) => account && useBrowse.getState().computeSize(account, p);
-
   const totalSelected = useMemo(
-    () =>
-      items
-        .filter((i) => selected.has(i.Path))
-        .reduce((sum, i) => {
-          if (!i.IsDir) return sum + Math.max(0, i.Size);
-          const v = sizeOf(i.Path);
-          return sum + (typeof v === "number" && v > 0 ? v : 0);
-        }, 0),
+    () => items.filter((i) => selected.has(i.Path)).reduce((sum, i) => sum + sizeOf(i), 0),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [items, selected, sizes],
+    [items, selected, index],
   );
 
   const allSelected = filtered.length > 0 && filtered.every((i) => selected.has(i.Path));
 
-  function toggle(item: RcItem) {
+  function toggle(p: string) {
     setSelected((prev) => {
       const next = new Set(prev);
-      if (next.has(item.Path)) next.delete(item.Path);
-      else {
-        next.add(item.Path);
-        if (item.IsDir && sizeOf(item.Path) === undefined) calc(item.Path); // need size for the total
-      }
+      next.has(p) ? next.delete(p) : next.add(p);
       return next;
     });
   }
@@ -96,11 +81,7 @@ export function ProfileView({ id }: { id: string }) {
     }
     const chosen: DownloadItem[] = items
       .filter((i) => selected.has(i.Path))
-      .map((i) => {
-        const v = sizeOf(i.Path);
-        const size = i.IsDir ? (typeof v === "number" ? v : 0) : Math.max(0, i.Size);
-        return { path: i.Path, name: i.Name, isDir: i.IsDir, size };
-      });
+      .map((i) => ({ path: i.Path, name: i.Name, isDir: i.IsDir, size: sizeOf(i) }));
     try {
       await startTransfer(account.id, chosen, dest);
       toast(`Started ${chosen.length} download${chosen.length === 1 ? "" : "s"}`, "success");
@@ -114,27 +95,6 @@ export function ProfileView({ id }: { id: string }) {
 
   const rootLabel = account.provider === "drive" ? "Shared with me" : "Home";
   const segments = path ? path.split("/") : [];
-
-  function SizeCell({ item }: { item: RcItem }) {
-    if (!item.IsDir) return <span className="tnum text-[var(--text-2)]">{formatBytes(item.Size)}</span>;
-    const v = sizeOf(item.Path);
-    if (v === "loading")
-      return (
-        <span className="inline-flex items-center gap-1.5 text-[var(--text-3)]">
-          <Loader2 size={12} className="animate-spin" /> calc…
-        </span>
-      );
-    if (typeof v === "number") return <span className="tnum text-[var(--text-2)]">{formatBytes(v)}</span>;
-    // undefined or "error" → click to calculate
-    return (
-      <button
-        onClick={() => calc(item.Path)}
-        className="inline-flex items-center gap-1.5 rounded-[6px] border border-[var(--border)] px-2 py-0.5 text-xs text-[var(--text-3)] hover:border-[var(--border-strong)] hover:text-[var(--text-2)]"
-      >
-        <Calculator size={12} /> {v === "error" ? "retry" : "Calc"}
-      </button>
-    );
-  }
 
   function NameCell({ item, big }: { item: RcItem; big?: boolean }) {
     const icon = item.IsDir ? (
@@ -160,11 +120,46 @@ export function ProfileView({ id }: { id: string }) {
     );
   }
 
+  const sizeText = (item: RcItem) => {
+    const s = sizeOf(item);
+    return s > 0 ? formatBytes(s) : "—";
+  };
+
   return (
     <div className="flex h-full min-h-0">
       <SidebarTree account={account} currentPath={path} onNavigate={setPath} />
 
       <div className="flex min-w-0 flex-1 flex-col">
+        {/* Indexing progress */}
+        {(status === "crawling" || status === "loading") && (
+          <div className="flex items-center gap-3 border-b border-[var(--border)] bg-[var(--surface)] px-5 py-2.5 text-sm text-[var(--text-2)]">
+            <Loader2 size={15} className="animate-spin text-[var(--accent)]" />
+            {status === "loading" ? (
+              <span>Loading cached index…</span>
+            ) : (
+              <>
+                <span className="whitespace-nowrap">
+                  Indexing {account.provider === "drive" ? "Drive" : "Dropbox"} ·{" "}
+                  <span className="tnum">
+                    {entry?.progress.done ?? 0}/{entry?.progress.total ?? 0}
+                  </span>{" "}
+                  folders
+                </span>
+                <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[var(--hover)]">
+                  <div
+                    className="h-full rounded-full bg-[var(--accent)] transition-[width]"
+                    style={{
+                      width: entry?.progress.total
+                        ? `${Math.round((entry.progress.done / entry.progress.total) * 100)}%`
+                        : "8%",
+                    }}
+                  />
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
         {/* Toolbar */}
         <div className="flex items-center gap-3 border-b border-[var(--border)] px-5 py-3">
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1 text-sm">
@@ -213,9 +208,10 @@ export function ProfileView({ id }: { id: string }) {
             </button>
           </div>
           <button
-            className="rounded-[8px] border border-[var(--border)] p-1.5 text-[var(--text-3)] hover:text-[var(--text)]"
-            onClick={() => account && useBrowse.getState().ensure(account, path, true)}
-            aria-label="Refresh"
+            className="rounded-[8px] border border-[var(--border)] p-1.5 text-[var(--text-3)] hover:text-[var(--text)] disabled:opacity-50"
+            onClick={() => useIndex.getState().recrawl(account)}
+            disabled={status === "crawling" || status === "loading"}
+            aria-label="Re-index"
           >
             <RefreshCw size={15} />
           </button>
@@ -223,15 +219,18 @@ export function ProfileView({ id }: { id: string }) {
 
         {/* Body */}
         <div className="min-h-0 flex-1 overflow-auto px-5 py-2" data-testid="file-list">
-          {error && (
+          {status === "error" && (
             <div className="mb-3 flex items-center gap-2 rounded-[8px] border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm text-[var(--error)]">
-              <AlertCircle size={16} /> {error}
+              <AlertCircle size={16} /> {entry?.error}
+              <button className="ml-2 underline" onClick={() => useIndex.getState().recrawl(account)}>
+                retry
+              </button>
             </div>
           )}
 
-          {loading && items.length === 0 ? (
+          {!index && status !== "error" ? (
             <div className="flex items-center gap-2 py-12 text-sm text-[var(--text-2)]">
-              <Loader2 className="animate-spin" size={16} /> Loading…
+              <Loader2 className="animate-spin" size={16} /> Indexing…
             </div>
           ) : filtered.length === 0 ? (
             <div className="py-12 text-sm text-[var(--text-2)]">{query ? "No matches." : "This folder is empty."}</div>
@@ -241,22 +240,18 @@ export function ProfileView({ id }: { id: string }) {
                 <div
                   key={item.Path}
                   className={`relative flex flex-col items-center gap-3 rounded-[11px] border p-5 ${
-                    selected.has(item.Path)
-                      ? "border-[var(--accent)] bg-[var(--card)]"
-                      : "border-[var(--border)] hover:bg-[var(--hover)]"
+                    selected.has(item.Path) ? "border-[var(--accent)] bg-[var(--card)]" : "border-[var(--border)] hover:bg-[var(--hover)]"
                   }`}
                 >
                   <input
                     type="checkbox"
                     aria-label={`Select ${item.Name}`}
                     checked={selected.has(item.Path)}
-                    onChange={() => toggle(item)}
+                    onChange={() => toggle(item.Path)}
                     className="absolute left-3 top-3"
                   />
                   <NameCell item={item} big />
-                  <div className="text-xs text-[var(--text-3)]">
-                    <SizeCell item={item} />
-                  </div>
+                  <div className="tnum text-xs text-[var(--text-3)]">{sizeText(item)}</div>
                 </div>
               ))}
             </div>
@@ -285,16 +280,14 @@ export function ProfileView({ id }: { id: string }) {
                         type="checkbox"
                         aria-label={`Select ${item.Name}`}
                         checked={selected.has(item.Path)}
-                        onChange={() => toggle(item)}
+                        onChange={() => toggle(item.Path)}
                       />
                     </td>
                     <td className="min-w-0 py-2.5 pr-3">
                       <NameCell item={item} />
                     </td>
-                    <td className="py-2.5 pl-4 text-xs text-[var(--text-3)]">{formatDate(item.ModTime)}</td>
-                    <td className="py-2.5 pl-4 text-right">
-                      <SizeCell item={item} />
-                    </td>
+                    <td className="py-2.5 pl-4 text-xs text-[var(--text-3)]">{formatDate(dateOf(item))}</td>
+                    <td className="tnum py-2.5 pl-4 text-right text-[var(--text-2)]">{sizeText(item)}</td>
                   </tr>
                 ))}
               </tbody>
