@@ -31,7 +31,7 @@ beforeEach(() => {
   useApp.setState({ accounts: [account], view: { kind: "browse", accountId: "drive_x", section: "all", path: "" } });
   useIndex.setState({ byAccount: { drive_x: { status: "ready", progress: { done: 0, total: 0, files: 0 }, index: buildIndex(flat) } } });
   useBrowse.setState({ listings: {}, loading: {}, errors: {}, sizes: {} });
-  useTransfers.setState({ jobs: [], dockOpen: true });
+  useTransfers.setState({ jobs: [], queue: [], concurrency: 1, dockOpen: true });
   useStarred.setState({ byAccount: {} });
   useSearch.setState({ q: "" });
   invokeMock.mockImplementation((cmd: string) => {

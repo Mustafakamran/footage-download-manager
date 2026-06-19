@@ -5,6 +5,7 @@ import { getSecret, setSecret, SECRET_KEYS } from "../lib/tauri/commands";
 import { Button, TextField, Card } from "./ui";
 import { loadPerf, savePerf, PRESETS, type PerfSettings } from "../lib/perf";
 import { useToasts } from "../store/toast";
+import { useTransfers } from "../store/transfers";
 
 const FOLDER_KEY = "default_download_folder";
 
@@ -17,6 +18,8 @@ export function SettingsView() {
   const [perf, setPerf] = useState<PerfSettings>(() => loadPerf());
   const [saved, setSaved] = useState<string | null>(null);
   const toast = useToasts((s) => s.push);
+  const concurrency = useTransfers((s) => s.concurrency);
+  const setConcurrency = useTransfers((s) => s.setConcurrency);
 
   useEffect(() => {
     (async () => {
@@ -188,6 +191,19 @@ export function SettingsView() {
             type="number"
             value={perf.bwLimitMB}
             onChange={(e) => setPerfField("bwLimitMB", Number(e.target.value))}
+          />
+        </div>
+        <div className="mt-4 flex items-center justify-between border-t border-[var(--border)] pt-4">
+          <div>
+            <div className="text-xs font-medium text-[var(--text-2)]">Simultaneous downloads</div>
+            <div className="text-[11px] text-[var(--text-3)]">Queue projects; 1 = strictly one at a time.</div>
+          </div>
+          <input
+            type="number"
+            min={1}
+            value={concurrency}
+            onChange={(e) => setConcurrency(Number(e.target.value))}
+            className="focus-accent w-20 rounded-[6px] border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
           />
         </div>
       </Card>

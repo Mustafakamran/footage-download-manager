@@ -4,70 +4,59 @@ const invokeMock = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invokeMock(...a) }));
 
 import { useTransfers } from "./transfers";
-import type { JobStatus } from "../lib/tauri/commands";
+import type { JobStatus, DownloadItem } from "../lib/tauri/commands";
 
+function item(name: string): DownloadItem {
+  return { path: name, name, isDir: false, size: 1000 };
+}
 function job(over: Partial<JobStatus>): JobStatus {
   return {
-    jobId: 1,
-    accountId: "drive_x",
-    name: "a.mxf",
-    dest: "/dest",
-    totalBytes: 1000,
-    bytes: 0,
-    speed: 0,
-    eta: null,
-    finished: false,
-    success: false,
-    cancelled: false,
-    error: "",
-    ...over,
+    jobId: 1, accountId: "drive_x", name: "a", dest: "/dest", totalBytes: 1000, bytes: 0,
+    speed: 0, eta: null, finished: false, success: false, cancelled: false, error: "", ...over,
   };
 }
 
+let nextJobId = 1;
+let listReturns: JobStatus[] = [];
+
 beforeEach(() => {
   invokeMock.mockReset();
-  useTransfers.setState({ jobs: [], dockOpen: true });
+  localStorage.clear();
+  nextJobId = 1;
+  listReturns = [];
+  useTransfers.setState({ jobs: [], queue: [], concurrency: 1, dockOpen: true });
+  invokeMock.mockImplementation((cmd: string) => {
+    if (cmd === "start_download") return Promise.resolve([job({ jobId: nextJobId++ })]);
+    if (cmd === "list_jobs") return Promise.resolve(listReturns);
+    return Promise.resolve(undefined);
+  });
 });
 
-afterEach(() => {
-  useTransfers.getState().stopPolling();
-});
+afterEach(() => useTransfers.getState().stopPolling());
 
-describe("transfers store", () => {
-  it("start() launches a download and tracks the returned jobs", async () => {
-    invokeMock.mockImplementation((cmd: string) => {
-      if (cmd === "start_download") return Promise.resolve([job({ jobId: 7 })]);
-      if (cmd === "list_jobs") return Promise.resolve([job({ jobId: 7, finished: true, success: true })]);
-      return Promise.resolve(undefined);
-    });
-
-    await useTransfers.getState().start("drive_x", [{ path: "a.mxf", name: "a.mxf", isDir: false, size: 1000 }], "/dest");
-
-    const jobs = useTransfers.getState().jobs;
-    expect(jobs).toHaveLength(1);
-    expect(jobs[0].jobId).toBe(7);
-    expect(invokeMock).toHaveBeenCalledWith(
-      "start_download",
-      expect.objectContaining({
-        accountId: "drive_x",
-        items: [{ path: "a.mxf", name: "a.mxf", isDir: false, size: 1000 }],
-        dest: "/dest",
-        config: expect.objectContaining({ Transfers: expect.any(Number) }),
-      }),
-    );
+describe("transfers queue", () => {
+  it("starts one at a time at concurrency 1, leaving the rest queued", async () => {
+    useTransfers.getState().enqueue("drive_x", [item("a"), item("b")], "/dest");
+    await vi.waitFor(() => expect(useTransfers.getState().jobs).toHaveLength(1));
+    expect(useTransfers.getState().queue).toHaveLength(1); // "b" still waiting
   });
 
-  it("cancel() calls cancel_job then refreshes", async () => {
-    useTransfers.setState({ jobs: [job({ jobId: 3 })] });
-    invokeMock.mockImplementation((cmd: string) => {
-      if (cmd === "cancel_job") return Promise.resolve(undefined);
-      if (cmd === "list_jobs") return Promise.resolve([job({ jobId: 3, cancelled: true, finished: true })]);
-      return Promise.resolve(undefined);
-    });
+  it("starts the next queued item when a slot frees", async () => {
+    useTransfers.getState().enqueue("drive_x", [item("a"), item("b")], "/dest");
+    await vi.waitFor(() => expect(useTransfers.getState().jobs).toHaveLength(1));
 
-    await useTransfers.getState().cancel(3);
+    // First job completes; a refresh frees the slot and pump starts "b".
+    listReturns = [job({ jobId: 1, finished: true, success: true })];
+    await useTransfers.getState().refresh();
+    await vi.waitFor(() => expect(useTransfers.getState().jobs.length).toBe(2));
+    expect(useTransfers.getState().queue).toHaveLength(0);
+  });
 
-    expect(invokeMock).toHaveBeenCalledWith("cancel_job", { jobId: 3 });
-    expect(useTransfers.getState().jobs[0].cancelled).toBe(true);
+  it("removes a queued item before it starts", async () => {
+    useTransfers.getState().enqueue("drive_x", [item("a"), item("b")], "/dest");
+    await vi.waitFor(() => expect(useTransfers.getState().queue).toHaveLength(1));
+    const qid = useTransfers.getState().queue[0].id;
+    useTransfers.getState().removeQueued(qid);
+    expect(useTransfers.getState().queue).toHaveLength(0);
   });
 });

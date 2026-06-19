@@ -33,7 +33,7 @@ const SECTION_TITLE: Record<Section, string> = {
 export function BrowsePane({ account, section, path }: { account: Account; section: Section; path: string }) {
   const setView = useApp((s) => s.setView);
   const entry = useIndex((s) => s.byAccount[account.id]);
-  const startTransfer = useTransfers((s) => s.start);
+  const enqueue = useTransfers((s) => s.enqueue);
   const toast = useToasts((s) => s.push);
   const q = useSearch((s) => s.q);
   const starred = useStarred((s) => s.byAccount[account.id]) ?? EMPTY_STARS;
@@ -118,13 +118,9 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
     const chosen: DownloadItem[] = items
       .filter((i) => selected.has(i.Path))
       .map((i) => ({ path: i.Path, name: i.Name, isDir: i.IsDir, size: sizeOf(i) }));
-    try {
-      await startTransfer(account.id, chosen, dest);
-      toast(`Started ${chosen.length} download${chosen.length === 1 ? "" : "s"}`, "success");
-      setSelected(new Set());
-    } catch (e) {
-      toast(String(e), "error");
-    }
+    enqueue(account.id, chosen, dest);
+    toast(`Queued ${chosen.length} download${chosen.length === 1 ? "" : "s"}`, "success");
+    setSelected(new Set());
   }
 
   const segments = path ? path.split("/") : [];
