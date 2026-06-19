@@ -8,6 +8,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "fetch:rclone": "node scripts/fetch-rclone.mjs"
   },
   "dependencies": {
@@ -27,6 +29,7 @@
     "postcss": "^8.5.15",
     "tailwindcss": "^4.3.1",
     "typescript": "~5.8.3",
-    "vite": "^7.0.4"
+    "vite": "^7.0.4",
+    "vitest": "^4.1.9"
   }
 }
