@@ -6,7 +6,7 @@
 //! binary via `std::process::Command` instead of the Tauri sidecar API.
 
 use google_drive_downloader_lib::rclone::config::{build_rcd_args, pick_free_port, RcConfig};
-use google_drive_downloader_lib::rclone::supervisor::{wait_until_ready, RcConnection};
+use google_drive_downloader_lib::rclone::supervisor::{rc_post, wait_until_ready, RcConnection};
 use std::path::PathBuf;
 use std::process::{Child, Command};
 
@@ -88,5 +88,15 @@ fn rclone_daemon_answers_core_version() {
     assert!(
         body.contains("\"version\""),
         "core/version JSON should contain a \"version\" field, got: {body}"
+    );
+
+    // 3. Prove the new Rust-routed path: rc_post is exactly what the rc_call
+    //    Tauri command calls under the hood. The frontend never touches HTTP.
+    let json = rc_post(&connection, "core/version", &serde_json::json!({}))
+        .expect("rc_post core/version");
+    eprintln!("rc_post core/version response: {json}");
+    assert!(
+        json.get("version").is_some(),
+        "rc_post core/version JSON should contain a \"version\" field, got: {json}"
     );
 }

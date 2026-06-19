@@ -1,44 +1,33 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+
+const invokeMock = vi.fn();
+vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invokeMock(...a) }));
+
 import { RcClient } from "./client";
-import type { RcConnection } from "./types";
 
-const conn: RcConnection = { base_url: "http://127.0.0.1:5572", user: "u", pass: "p" };
-
+// NOTE: the mock is reset at the top of each test body rather than in a
+// `beforeEach` hook. Under Vitest 4 a `beforeEach` that touches this module
+// mock spuriously fails the rejection test below; resetting in-body avoids it
+// while still giving every test a clean mock.
 describe("RcClient", () => {
-  beforeEach(() => vi.restoreAllMocks());
-
-  it("POSTs to the endpoint with basic auth and returns parsed JSON", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ version: "v1.69.1", os: "darwin", arch: "arm64", goVersion: "go1.22" }),
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    const client = new RcClient(conn);
-    const v = await client.coreVersion();
-
+  it("routes coreVersion through the rc_call command", async () => {
+    invokeMock.mockReset();
+    invokeMock.mockResolvedValue({ version: "v1.69.1", os: "darwin", arch: "arm64", goVersion: "go1.24" });
+    const v = await new RcClient().coreVersion();
     expect(v.version).toBe("v1.69.1");
-    const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("http://127.0.0.1:5572/core/version");
-    expect(init.method).toBe("POST");
-    expect(init.headers.Authorization).toBe("Basic " + btoa("u:p"));
+    expect(invokeMock).toHaveBeenCalledWith("rc_call", { endpoint: "core/version", params: {} });
   });
 
-  it("throws on non-ok responses", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 500, text: async () => "boom" }));
-    const client = new RcClient(conn);
-    await expect(client.coreVersion()).rejects.toThrow(/500/);
+  it("passes params through to rc_call", async () => {
+    invokeMock.mockReset();
+    invokeMock.mockResolvedValue({});
+    await new RcClient().call("operations/list", { fs: "drive:", remote: "" });
+    expect(invokeMock).toHaveBeenCalledWith("rc_call", { endpoint: "operations/list", params: { fs: "drive:", remote: "" } });
   });
 
-  it("serializes params into the JSON body with the json content-type", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
-    vi.stubGlobal("fetch", fetchMock);
-
-    await new RcClient(conn).call("operations/list", { fs: "drive:", remote: "" });
-
-    const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("http://127.0.0.1:5572/operations/list");
-    expect(init.headers["Content-Type"]).toBe("application/json");
-    expect(JSON.parse(init.body)).toEqual({ fs: "drive:", remote: "" });
+  it("propagates errors from rc_call", async () => {
+    invokeMock.mockReset();
+    invokeMock.mockRejectedValue(new Error("rclone not started"));
+    await expect(new RcClient().coreVersion()).rejects.toThrow(/not started/);
   });
 });

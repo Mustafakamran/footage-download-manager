@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { getRcConnection } from "./lib/tauri/connection";
 import { RcClient } from "./lib/rc/client";
 
 export default function App() {
@@ -9,9 +8,7 @@ export default function App() {
   useEffect(() => {
     (async () => {
       try {
-        const conn = await getRcConnection();
-        const client = new RcClient(conn);
-        const v = await client.coreVersion();
+        const v = await new RcClient().coreVersion();
         setVersion(`${v.version} (${v.os}/${v.arch})`);
       } catch (e) {
         setError(String(e));

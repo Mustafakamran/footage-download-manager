@@ -69,6 +69,30 @@ pub fn wait_until_ready(conn: &RcConnection) -> Result<(), String> {
     Err("rclone daemon did not become ready in time".into())
 }
 
+/// POST a JSON params object to an rc endpoint with basic auth; return parsed JSON.
+pub fn rc_post(
+    conn: &RcConnection,
+    endpoint: &str,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let client = reqwest::blocking::Client::new();
+    let url = format!("{}/{}", conn.base_url, endpoint);
+    let body = serde_json::to_string(params).map_err(|e| e.to_string())?;
+    let resp = client
+        .post(&url)
+        .basic_auth(&conn.user, Some(&conn.pass))
+        .header("Content-Type", "application/json")
+        .body(body)
+        .send()
+        .map_err(|e| e.to_string())?;
+    let status = resp.status();
+    let text = resp.text().map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(format!("rc {endpoint} failed: {status} {text}"));
+    }
+    serde_json::from_str(&text).map_err(|e| e.to_string())
+}
+
 /// Kill the daemon on shutdown.
 pub fn stop_rclone(state: &RcloneState) {
     // Recover from a poisoned lock so shutdown still kills the child.
