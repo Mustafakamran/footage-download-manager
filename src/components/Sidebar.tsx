@@ -47,7 +47,7 @@ export function Sidebar() {
   const totalSpeed = active.reduce((s, j) => s + Math.max(0, j.speed), 0);
 
   return (
-    <aside className="flex w-64 shrink-0 flex-col border-r border-[var(--border)] bg-[var(--surface)]">
+    <aside className="flex w-64 shrink-0 flex-col overflow-hidden rounded-[12px] border border-[var(--border)] bg-[var(--surface)]">
       {/* Accounts */}
       <div className="px-3 pt-4">
         <div className="mb-2 flex items-center justify-between px-1">

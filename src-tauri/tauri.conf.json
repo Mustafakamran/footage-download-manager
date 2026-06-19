@@ -10,6 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
         "title": "Footage Download Manager",
@@ -17,7 +18,8 @@
         "height": 860,
         "minWidth": 980,
         "minHeight": 640,
-        "decorations": false
+        "decorations": false,
+        "transparent": true
       }
     ],
     "security": {

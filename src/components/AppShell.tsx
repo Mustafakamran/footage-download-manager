@@ -13,15 +13,15 @@ export function AppShell() {
   const browseAccount = view.kind === "browse" ? accounts.find((a) => a.id === view.accountId) : undefined;
 
   return (
-    <div className="flex h-full flex-col bg-[var(--bg)]">
+    <div className="flex h-screen flex-col overflow-hidden rounded-[var(--window-radius)] border border-[var(--border)] bg-[var(--bg)]">
       <TopBar />
       <ToastHost />
       <NotificationsPanel />
 
-      <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 flex-1 gap-2.5 px-2.5 pb-2.5">
         <Sidebar />
-        <div className="flex min-h-0 flex-1 flex-col">
-          <main className="min-h-0 flex-1 overflow-hidden">
+        <div className="flex min-h-0 flex-1 flex-col gap-2.5">
+          <div className="min-h-0 flex-1 overflow-hidden rounded-[12px] border border-[var(--border)] bg-[var(--surface)]">
             {view.kind === "settings" && (
               <div className="h-full overflow-auto">
                 <SettingsView />
@@ -34,7 +34,7 @@ export function AppShell() {
               ) : (
                 <ConnectView />
               ))}
-          </main>
+          </div>
           <DownloadsDock />
         </div>
       </div>

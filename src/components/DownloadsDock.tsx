@@ -70,7 +70,7 @@ export function DownloadsDock() {
   const totalPct = totalBytes > 0 ? Math.min(100, Math.round((doneBytes / totalBytes) * 100)) : 0;
 
   return (
-    <div className="shrink-0 border-t border-[var(--border)] bg-[var(--bg)]">
+    <div className="shrink-0 overflow-hidden rounded-[12px] border border-[var(--border)] bg-[var(--surface)]">
       <div className="flex items-center justify-between px-6 py-2.5">
         <button onClick={() => setOpen((o) => !o)} className="flex items-center gap-2 text-sm font-medium text-[var(--text)]">
           {open ? <ChevronDown size={16} /> : <ChevronUp size={16} />}

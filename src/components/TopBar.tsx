@@ -27,7 +27,7 @@ export function TopBar() {
   return (
     <header
       data-tauri-drag-region
-      className="flex h-14 shrink-0 select-none items-center gap-3 border-b border-[var(--border)] bg-[var(--bg)] pl-4 pr-2"
+      className="flex h-14 shrink-0 select-none items-center gap-3 bg-transparent pl-4 pr-2"
     >
       {/* Brand */}
       <button

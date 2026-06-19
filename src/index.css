@@ -5,22 +5,24 @@
 :root {
   color-scheme: dark;
 
-  --bg: #181a1d;
-  --surface: #202327;
-  --card: #262a2f;
-  --hover: #2e333a;
-  --border: #33383f;
-  --border-strong: #424852;
+  --bg: #0a0a0b;
+  --surface: #141416;
+  --card: #1c1c1f;
+  --hover: #242427;
+  --border: #2a2a2e;
+  --border-strong: #3a3a40;
 
-  --text: #eef0f2;
-  --text-2: #a7adb5;
-  --text-3: #717880;
+  --text: #f2f3f5;
+  --text-2: #a3a6ad;
+  --text-3: #6a6d75;
 
-  --accent: #3d8bff;
-  --accent-hover: #5fa0ff;
+  --accent: #4c8dff;
+  --accent-hover: #6aa1ff;
   --accent-ink: #ffffff;
-  --accent-weak: rgba(61, 139, 255, 0.14);
-  --accent-glow: rgba(61, 139, 255, 0.26);
+  --accent-weak: rgba(76, 141, 255, 0.14);
+  --accent-glow: rgba(76, 141, 255, 0.26);
+
+  --window-radius: 14px;
 
   --success: #3fb950;
   --warning: #d29922;
@@ -42,10 +44,8 @@ body,
 
 body {
   margin: 0;
-  /* Faint warm glow from the top — calm depth, refined-minimal restraint. */
-  background:
-    radial-gradient(1100px 520px at 50% -14%, rgba(61, 139, 255, 0.05), transparent 60%),
-    var(--bg);
+  /* Transparent so the rounded app window shows the desktop at its corners. */
+  background: transparent;
   color: var(--text);
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;

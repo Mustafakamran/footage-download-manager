@@ -246,7 +246,7 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
         ) : (
           <table className="w-full border-collapse text-sm">
             <thead>
-              <tr className="sticky top-0 z-10 bg-[var(--bg)] text-left text-xs text-[var(--text-3)]">
+              <tr className="sticky top-0 z-10 bg-[var(--surface)] text-left text-xs text-[var(--text-3)]">
                 <th className="w-9 py-2.5"><input type="checkbox" aria-label="Select all" checked={allSelected} onChange={() => setSelected(allSelected ? new Set() : new Set(items.map((i) => i.Path)))} /></th>
                 <th className="py-2.5 font-medium">Name</th>
                 <th className="w-44 py-2.5 font-medium">Modified</th>
