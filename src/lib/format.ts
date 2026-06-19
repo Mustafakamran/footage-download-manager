@@ -27,9 +27,13 @@ export function formatEta(seconds: number | null): string {
   return `${h}h ${String(m % 60).padStart(2, "0")}m`;
 }
 
-/** Short date for the file table; invalid → "—". */
+/** Short date for the file table; invalid or placeholder → "—". */
 export function formatDate(iso: string): string {
+  if (!iso) return "—";
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
+  // rclone returns a zero/placeholder time when the backend has none (Dropbox
+  // folders, etc.) — surfaces as year 0001 or 2000. Treat anything implausibly
+  // old as "no date" rather than showing a misleading value.
+  if (Number.isNaN(d.getTime()) || d.getTime() < Date.UTC(2001, 0, 1)) return "—";
   return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }

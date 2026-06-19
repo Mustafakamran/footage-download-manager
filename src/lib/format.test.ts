@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatBytes, formatSpeed, formatEta } from "./format";
+import { formatBytes, formatSpeed, formatEta, formatDate } from "./format";
 
 describe("formatBytes", () => {
   it("handles zero, negative, and NaN", () => {
@@ -21,6 +21,18 @@ describe("formatSpeed", () => {
   it("appends /s and handles zero", () => {
     expect(formatSpeed(0)).toBe("—");
     expect(formatSpeed(5 * 1024 * 1024)).toBe("5.00 MB/s");
+  });
+});
+
+describe("formatDate", () => {
+  it("shows '—' for empty, invalid, or placeholder dates", () => {
+    expect(formatDate("")).toBe("—");
+    expect(formatDate("not-a-date")).toBe("—");
+    expect(formatDate("2000-01-01T00:00:00Z")).toBe("—"); // rclone placeholder
+    expect(formatDate("0001-01-01T00:00:00Z")).toBe("—");
+  });
+  it("formats real dates", () => {
+    expect(formatDate("2026-06-19T00:00:00Z")).toMatch(/2026/);
   });
 });
 

@@ -58,12 +58,24 @@ export function AppShell() {
 
       {/* Content + transfers dock */}
       <div className="flex min-h-0 flex-1">
-        <main className="min-h-0 flex-1 overflow-auto">
-          <div key={view.kind === "profile" ? `profile:${view.id}` : view.kind} className="animate-rise h-full">
-            {view.kind === "accounts" && <AccountsView />}
-            {view.kind === "settings" && <SettingsView />}
-            {view.kind === "profile" && <ProfileView id={view.id} />}
-          </div>
+        <main className="relative min-h-0 flex-1">
+          {view.kind === "accounts" && (
+            <div className="animate-rise h-full overflow-auto">
+              <AccountsView />
+            </div>
+          )}
+          {view.kind === "settings" && (
+            <div className="animate-rise h-full overflow-auto">
+              <SettingsView />
+            </div>
+          )}
+          {/* Profile tabs stay mounted; we just show/hide them so switching is
+              instant (no remount, no re-fetch, scroll + path preserved). */}
+          {openTabs.map((id) => (
+            <div key={id} className={view.kind === "profile" && view.id === id ? "h-full" : "hidden"}>
+              <ProfileView id={id} />
+            </div>
+          ))}
         </main>
         <TransfersDock />
       </div>
