@@ -29,7 +29,7 @@ beforeEach(() => {
   invokeMock.mockReset();
   localStorage.clear();
   useApp.setState({ accounts: [account], view: { kind: "browse", accountId: "drive_x", section: "all", path: "" } });
-  useIndex.setState({ byAccount: { drive_x: { status: "ready", progress: { done: 0, total: 0 }, index: buildIndex(flat, 0) } } });
+  useIndex.setState({ byAccount: { drive_x: { status: "ready", progress: { done: 0, total: 0 }, index: buildIndex(flat) } } });
   useBrowse.setState({ listings: {}, loading: {}, errors: {}, sizes: {} });
   useTransfers.setState({ jobs: [], dockOpen: true });
   useStarred.setState({ byAccount: {} });

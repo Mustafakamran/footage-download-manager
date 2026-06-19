@@ -1,7 +1,7 @@
 pub mod accounts;
 pub mod download;
 pub mod drive;
-pub mod index_store;
+pub mod index;
 pub mod rclone;
 pub mod secrets;
 
@@ -33,6 +33,7 @@ pub fn run() {
         .manage(RcloneState::default())
         .manage(JobsState::default())
         .manage(accounts::OAuthState::default())
+        .manage(index::IndexState::default())
         .invoke_handler(tauri::generate_handler![
             rc_call,
             accounts::list_accounts,
@@ -47,9 +48,11 @@ pub fn run() {
             download::cancel_job,
             download::clear_finished_jobs,
             drive::drive_uploader,
-            index_store::save_index,
-            index_store::load_index,
-            index_store::delete_index,
+            index::index_start,
+            index::index_recrawl,
+            index::index_get,
+            index::index_status,
+            index::index_remove,
         ])
         .setup(|app| {
             let handle = app.handle().clone();

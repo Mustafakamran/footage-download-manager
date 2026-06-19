@@ -1,8 +1,6 @@
-import { RcClient } from "./rc/client";
-import { buildFs, listFolder, type RcItem } from "./rc/browse";
-import { saveIndex, loadIndex, type Account } from "./tauri/commands";
+import { invoke } from "@tauri-apps/api/core";
+import type { RcItem } from "./rc/browse";
 
-/** Recursive aggregate for a folder: total size, newest descendant date, file count. */
 export interface Aggregate {
   size: number;
   latest: string; // ISO of the newest file anywhere beneath the folder
@@ -12,53 +10,37 @@ export interface Aggregate {
 export interface AccountIndex {
   tree: Record<string, RcItem[]>; // parent path -> direct children
   agg: Record<string, Aggregate>; // folder path -> recursive aggregate
-  crawledAt: number;
 }
 
-// Bump when the crawl/index format changes so stale on-disk caches are discarded
-// and re-crawled automatically. v2: fixed path double-prefixing.
-const INDEX_VERSION = 2;
-
-function sortItems(items: RcItem[]): RcItem[] {
-  return items.sort((a, b) => {
-    if (a.IsDir !== b.IsDir) return a.IsDir ? -1 : 1;
-    return a.Name.toLowerCase().localeCompare(b.Name.toLowerCase());
-  });
-}
-
-/**
- * Pure: turn a flat list of root-relative entries into a browseable tree plus
- * per-folder recursive aggregates (size, newest date, file count).
- */
-export function buildIndex(flat: RcItem[], crawledAt: number): AccountIndex {
+/** Pure tree+aggregate builder — kept for tests/seeding (production builds in Rust). */
+export function buildIndex(flat: RcItem[]): AccountIndex {
   const tree: Record<string, RcItem[]> = {};
   const agg: Record<string, Aggregate> = {};
-
   for (const it of flat) {
     const slash = it.Path.lastIndexOf("/");
     const parent = slash === -1 ? "" : it.Path.slice(0, slash);
     (tree[parent] ||= []).push(it);
-
     if (it.IsDir) {
       agg[it.Path] ||= { size: 0, latest: "", fileCount: 0 };
     } else {
-      // Roll the file up into every ancestor folder.
       let p = it.Path;
       while (p.includes("/")) {
         p = p.slice(0, p.lastIndexOf("/"));
         const a = (agg[p] ||= { size: 0, latest: "", fileCount: 0 });
         a.size += Math.max(0, it.Size);
         a.fileCount += 1;
-        if (it.ModTime > a.latest) a.latest = it.ModTime; // ISO strings compare lexically
+        if (it.ModTime > a.latest) a.latest = it.ModTime;
       }
     }
   }
-
-  for (const k in tree) sortItems(tree[k]);
-  return { tree, agg, crawledAt };
+  for (const k in tree)
+    tree[k].sort((a, b) =>
+      a.IsDir !== b.IsDir ? (a.IsDir ? -1 : 1) : a.Name.toLowerCase().localeCompare(b.Name.toLowerCase()),
+    );
+  return { tree, agg };
 }
 
-/** All files across the whole index, newest first (for the Recent view). */
+/** All files across the whole index, newest first (Recent view). */
 export function recentFiles(index: AccountIndex, limit = 200): RcItem[] {
   const files: RcItem[] = [];
   for (const k in index.tree) for (const it of index.tree[k]) if (!it.IsDir) files.push(it);
@@ -66,107 +48,29 @@ export function recentFiles(index: AccountIndex, limit = 200): RcItem[] {
   return files.slice(0, limit);
 }
 
-/** Resolve an entry by its full path (used to render starred items). */
+/** Resolve an entry by full path (for starred items). */
 export function itemAt(index: AccountIndex, path: string): RcItem | undefined {
   const slash = path.lastIndexOf("/");
   const parent = slash === -1 ? "" : path.slice(0, slash);
   return (index.tree[parent] ?? []).find((i) => i.Path === path);
 }
 
-async function listRecurse(account: Account, remote: string): Promise<RcItem[]> {
-  const res = await new RcClient().call<{ list?: RcItem[] }>("operations/list", {
-    fs: buildFs(account),
-    remote,
-    opt: { recurse: true },
-  });
-  return res?.list ?? [];
+/** Kick the Rust background indexer (serve from memory / disk / crawl). */
+export function indexStart(accountId: string): Promise<void> {
+  return invoke("index_start", { accountId });
 }
 
-/** Run async tasks with a concurrency cap, reporting progress as each completes. */
-async function pool<T>(
-  items: T[],
-  limit: number,
-  fn: (item: T) => Promise<void>,
-  onDone: (done: number) => void,
-): Promise<void> {
-  let i = 0;
-  let done = 0;
-  async function worker() {
-    while (i < items.length) {
-      const idx = i++;
-      try {
-        await fn(items[idx]);
-      } catch {
-        /* skip a failed subtree, keep indexing */
-      }
-      onDone(++done);
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+/** Force a fresh crawl. */
+export function indexRecrawl(accountId: string): Promise<void> {
+  return invoke("index_recrawl", { accountId });
 }
 
-/**
- * Crawl an account into a flat entry list. Lists the root, then recursively
- * lists each top-level folder (concurrently) so progress can be reported as
- * folders-done / total. Paths are normalized to be root-relative.
- */
-export async function crawlAccount(
-  account: Account,
-  onProgress: (done: number, total: number) => void,
-): Promise<RcItem[]> {
-  const root = await listFolder(account, "");
-  const rootDirs = root.filter((d) => d.IsDir);
-  const flat: RcItem[] = [...root];
-  onProgress(0, rootDirs.length);
-
-  await pool(
-    rootDirs,
-    5,
-    async (dir) => {
-      // Retry a flaky/large subtree once before giving up.
-      let sub: RcItem[] = [];
-      for (let attempt = 0; attempt < 2; attempt++) {
-        try {
-          sub = await listRecurse(account, dir.Path);
-          break;
-        } catch (e) {
-          if (attempt === 1) throw e;
-        }
-      }
-      const prefix = `${dir.Path}/`;
-      for (const it of sub) {
-        // rclone's recursive list already returns root-relative paths; only
-        // prefix if it didn't (be robust to either behaviour, never double up).
-        const full = it.Path === dir.Path || it.Path.startsWith(prefix) ? it.Path : prefix + it.Path;
-        flat.push({ ...it, Path: full });
-      }
-    },
-    (done) => onProgress(done, rootDirs.length),
-  );
-
-  return flat;
+/** Fetch the built index ({tree, agg}) once ready. */
+export function indexGet(accountId: string): Promise<AccountIndex | null> {
+  return invoke<AccountIndex | null>("index_get", { accountId });
 }
 
-/** Crawl + persist; returns the built index. */
-export async function crawlAndSave(
-  account: Account,
-  onProgress: (done: number, total: number) => void,
-  crawledAt: number,
-): Promise<AccountIndex> {
-  const flat = await crawlAccount(account, onProgress);
-  await saveIndex(account.id, JSON.stringify({ version: INDEX_VERSION, flat, crawledAt })).catch(() => {});
-  return buildIndex(flat, crawledAt);
-}
-
-/** Load a cached index from disk, or null if none. */
-export async function loadCachedIndex(accountId: string): Promise<AccountIndex | null> {
-  const raw = await loadIndex(accountId).catch(() => null);
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as { version?: number; flat: RcItem[]; crawledAt: number };
-    if (parsed.version !== INDEX_VERSION) return null; // stale format → re-crawl
-    return buildIndex(parsed.flat ?? [], parsed.crawledAt ?? 0);
-  } catch {
-    return null;
-  }
+/** Drop an account's index. */
+export function indexRemove(accountId: string): Promise<void> {
+  return invoke("index_remove", { accountId });
 }
