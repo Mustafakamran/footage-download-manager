@@ -113,3 +113,8 @@ export function driveUploader(accountId: string, fileId: string): Promise<string
 export function accountEmail(accountId: string): Promise<string | null> {
   return invoke<string | null>("account_email", { accountId });
 }
+
+/** Add a Google Drive shared-folder link as a browseable account (root-folder-id). */
+export function addDriveLink(baseAccountId: string, label: string, folderId: string): Promise<Account> {
+  return invoke<Account>("add_drive_link", { baseAccountId, label, folderId });
+}

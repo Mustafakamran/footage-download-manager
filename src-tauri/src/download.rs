@@ -64,6 +64,11 @@ pub struct JobStatus {
 /// Drive surfaces "Shared with me"; Dropbox is plain.
 pub fn account_fs(account_id: &str) -> Result<String, String> {
     let acct = parse_remote(account_id).ok_or_else(|| format!("bad account id: {account_id}"))?;
+    // Drive *links* are rooted at a folder id in their config — list them plainly,
+    // not via "Shared with me".
+    if account_id.starts_with("drivelink_") {
+        return Ok(format!("{account_id}:"));
+    }
     Ok(match acct.provider.as_str() {
         "drive" => format!("{account_id},shared_with_me=true:"),
         _ => format!("{account_id}:"),
@@ -259,6 +264,7 @@ mod tests {
     fn account_fs_drive_uses_shared_with_me() {
         assert_eq!(account_fs("drive_x").unwrap(), "drive_x,shared_with_me=true:");
         assert_eq!(account_fs("dropbox_y").unwrap(), "dropbox_y:");
+        assert_eq!(account_fs("drivelink_client_a").unwrap(), "drivelink_client_a:");
         assert!(account_fs("bogus").is_err());
     }
 

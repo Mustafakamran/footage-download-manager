@@ -8,7 +8,7 @@ use crate::rclone::supervisor::{rc_post, RcConnection, RcloneState};
 use serde_json::Value;
 
 /// Pull `token`, `client_id`, `client_secret` for a remote out of `config/dump`.
-fn remote_creds(dump: &Value, remote: &str) -> Option<(String, String, String)> {
+pub(crate) fn remote_creds(dump: &Value, remote: &str) -> Option<(String, String, String)> {
     let cfg = dump.get(remote)?;
     let token = cfg.get("token").and_then(|v| v.as_str())?.to_string();
     let client_id = cfg.get("client_id").and_then(|v| v.as_str())?.to_string();

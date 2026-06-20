@@ -43,6 +43,7 @@ pub fn run() {
             accounts::get_secret,
             accounts::delete_secret,
             accounts::account_email,
+            accounts::add_drive_link,
             download::start_download,
             download::list_jobs,
             download::cancel_job,

@@ -18,6 +18,8 @@ export interface RcItem {
  * shared_with_me connection parameter. Dropbox uses the plain remote.
  */
 export function buildFs(account: Account): string {
+  // Drive links are rooted at a folder id — list plainly, not "Shared with me".
+  if (account.id.startsWith("drivelink_")) return `${account.id}:`;
   return account.provider === "drive"
     ? `${account.id},shared_with_me=true:`
     : `${account.id}:`;

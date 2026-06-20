@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, FolderOpen, Clock, Star, Users, Download, Check, Pause, AlertCircle, Globe, Trash2, Loader2 } from "lucide-react";
+import { Plus, FolderOpen, Clock, Star, Users, Download, Check, Pause, AlertCircle, Globe, Trash2, Loader2, Link as LinkIcon } from "lucide-react";
 import { useApp, type Section } from "../store/app";
 import { useTransfers } from "../store/transfers";
 import { useStorage } from "../store/storage";
@@ -7,6 +7,7 @@ import { useAccountMeta, prettyLabel } from "../store/account-meta";
 import { useIndex } from "../store/index-store";
 import { ProviderIcon, providerName } from "./icons";
 import { AddAccountDialog } from "./AddAccountDialog";
+import { AddLinkDialog } from "./AddLinkDialog";
 import { formatBytes, formatSpeed } from "../lib/format";
 import type { Provider } from "../lib/tauri/commands";
 
@@ -28,6 +29,7 @@ export function Sidebar() {
   const emailErrors = useAccountMeta((s) => s.errors);
   const fetchEmail = useAccountMeta((s) => s.fetchEmail);
   const [addProvider, setAddProvider] = useState<Provider | null>(null);
+  const [addLink, setAddLink] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
 
@@ -78,6 +80,15 @@ export function Sidebar() {
                     <ProviderIcon provider={p} size={15} /> {providerName(p)}
                   </button>
                 ))}
+                <button
+                  onClick={() => {
+                    setAddLink(true);
+                    setMenuOpen(false);
+                  }}
+                  className="flex w-full items-center gap-2 border-t border-[var(--border)] px-3 py-2 text-left text-sm text-[var(--text-2)] hover:bg-[var(--hover)] hover:text-[var(--text)]"
+                >
+                  <LinkIcon size={15} /> Shared link
+                </button>
               </div>
             )}
           </div>
@@ -233,6 +244,7 @@ export function Sidebar() {
       </div>
 
       {addProvider && <AddAccountDialog provider={addProvider} onClose={() => setAddProvider(null)} />}
+      {addLink && <AddLinkDialog onClose={() => setAddLink(false)} />}
     </aside>
   );
 }

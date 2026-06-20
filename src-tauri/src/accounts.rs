@@ -73,10 +73,14 @@ pub fn remote_name(provider: &str, label: &str) -> String {
 /// Parse an rclone remote name into an `Account`. Returns `None` if the remote
 /// doesn't start with a known provider prefix or has no `_` separator.
 pub fn parse_remote(remote: &str) -> Option<Account> {
-    let (provider, slug) = remote.split_once('_')?;
-    if !PROVIDERS.contains(&provider) {
-        return None;
-    }
+    let (prefix, slug) = remote.split_once('_')?;
+    // `drivelink_*` is a Google Drive shared-folder link (rooted at a folder id);
+    // it presents as a Drive account but its fs is built without shared_with_me.
+    let provider = match prefix {
+        "drive" | "dropbox" => prefix,
+        "drivelink" => "drive",
+        _ => return None,
+    };
     if slug.is_empty() {
         return None;
     }
@@ -297,6 +301,49 @@ pub fn account_email(
         "drive" => crate::drive::drive_email(&conn, &account_id),
         _ => crate::drive::dropbox_email(&conn, &account_id),
     }
+}
+
+/// Add a Google Drive shared-folder link as a browseable account, rooted at the
+/// folder id, reusing a connected Drive account's token (no extra sign-in, no
+/// "add to my Drive"). It then indexes/browses/downloads exactly like an account.
+#[tauri::command]
+pub fn add_drive_link(
+    rclone: tauri::State<RcloneState>,
+    base_account_id: String,
+    label: String,
+    folder_id: String,
+) -> Result<Account, String> {
+    if parse_remote(&base_account_id).map(|a| a.provider) != Some("drive".to_string()) {
+        return Err("base account must be a Google Drive account".into());
+    }
+    if folder_id.trim().is_empty() {
+        return Err("missing folder id".into());
+    }
+    let conn = rclone
+        .connection
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .ok_or_else(|| "rclone not started".to_string())?;
+    let dump = rc_post(&conn, "config/dump", &serde_json::json!({}))?;
+    let (token, client_id, client_secret) =
+        crate::drive::remote_creds(&dump, &base_account_id).ok_or_else(|| "no Drive credentials".to_string())?;
+
+    let remote = remote_name("drivelink", &label);
+    let params = serde_json::json!({
+        "name": remote,
+        "type": "drive",
+        "parameters": {
+            "token": token,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "root_folder_id": folder_id.trim(),
+            "scope": "drive.readonly"
+        },
+        "opt": { "nonInteractive": true, "all": true }
+    });
+    rc_post(&conn, "config/create", &params)?;
+    parse_remote(&remote).ok_or_else(|| format!("bad remote name: {remote}"))
 }
 
 /// Store an OAuth app credential in the OS keychain.
