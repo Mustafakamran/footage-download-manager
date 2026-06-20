@@ -20,27 +20,40 @@ else { Set-Location $PSScriptRoot }
 $log = Join-Path (Get-Location) "build-windows.log"
 try { Start-Transcript -Path $log -Force | Out-Null } catch {}
 
+$script:winget = $null
 function Have($cmd) { return [bool](Get-Command $cmd -ErrorAction SilentlyContinue) }
 function Refresh-Path {
   $machine = [Environment]::GetEnvironmentVariable("Path", "Machine")
   $user = [Environment]::GetEnvironmentVariable("Path", "User")
-  $extra = "$env:USERPROFILE\.cargo\bin;$env:ProgramFiles\nodejs;$env:ProgramFiles\Git\cmd;$env:LOCALAPPDATA\Microsoft\WinGet\Links"
+  # Include the App-Execution-Alias dir (winget lives here) — elevated sessions drop it.
+  $extra = "$env:USERPROFILE\.cargo\bin;$env:ProgramFiles\nodejs;$env:ProgramFiles\Git\cmd;$env:LOCALAPPDATA\Microsoft\WindowsApps;$env:LOCALAPPDATA\Microsoft\WinGet\Links"
   $env:Path = "$machine;$user;$extra"
+}
+function Resolve-Winget {
+  Refresh-Path
+  if (Have winget) { return (Get-Command winget).Source }
+  # Fall back to the versioned binary under Program Files\WindowsApps (admin can read it).
+  $exe = Get-ChildItem "$env:ProgramFiles\WindowsApps\Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe\winget.exe" -ErrorAction SilentlyContinue |
+    Sort-Object FullName | Select-Object -Last 1
+  if ($exe) { return $exe.FullName }
+  return $null
 }
 
 function Main {
   Write-Host "`n== Footage Download Manager :: Windows build ==`n" -ForegroundColor Cyan
   Write-Host "Log: $log`n" -ForegroundColor DarkGray
 
-  if (-not (Have winget)) {
+  $script:winget = Resolve-Winget
+  if (-not $script:winget) {
     throw "winget not found. Install 'App Installer' from the Microsoft Store (Windows 10 21H1+/11), then re-run."
   }
+  Write-Host "  [ok] winget: $script:winget" -ForegroundColor DarkGray
 
   function Ensure-Tool($id, $cmd) {
     Refresh-Path
     if (Have $cmd) { Write-Host "  [ok] $cmd" -ForegroundColor DarkGray; return }
     Write-Host "  [install] $id ..." -ForegroundColor Yellow
-    winget install --id $id -e --accept-source-agreements --accept-package-agreements --silent
+    & $script:winget install --id $id -e --accept-source-agreements --accept-package-agreements --silent
     Refresh-Path
     if (-not (Have $cmd)) {
       Write-Host "  [warn] $cmd installed but not yet on PATH (a reboot may be needed)" -ForegroundColor Yellow
@@ -60,7 +73,7 @@ function Main {
   )
   if (-not ($vsRoots | Where-Object { Test-Path $_ })) {
     Write-Host "  [install] Visual Studio C++ Build Tools (large, several minutes) ..." -ForegroundColor Yellow
-    winget install --id Microsoft.VisualStudio.2022.BuildTools -e --silent `
+    & $script:winget install --id Microsoft.VisualStudio.2022.BuildTools -e --silent `
       --accept-source-agreements --accept-package-agreements `
       --override "--quiet --wait --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
   } else {
