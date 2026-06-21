@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronLeft, MessageSquarePlus, Trash2, Check, FileDown, Loader2, AlertCircle, Clock } from "lucide-react";
+import { ChevronLeft, MessageSquarePlus, Trash2, Check, FileDown, Loader2, AlertCircle, Clock, Lock, Unlock } from "lucide-react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { useApp, type ReviewTarget } from "../store/app";
 import { useReview, fileKey, type FileReview } from "../store/review";
@@ -26,21 +26,46 @@ export function ReviewView({ accountId, target }: { accountId: string; target: R
   const [url, setUrl] = useState<string | null>(null);
   const [err, setErr] = useState("");
   const [duration, setDuration] = useState(0);
-  const [pendingTime, setPendingTime] = useState<number | null>(null);
+  const [curTime, setCurTime] = useState(0);
+  const [locked, setLocked] = useState(false);
+  const [lockedTime, setLockedTime] = useState(0);
+  const [noCors, setNoCors] = useState(false);
+  const [diag, setDiag] = useState("");
   const [text, setText] = useState("");
   const [exporting, setExporting] = useState(false);
 
   const playable = isPlayable(target.name);
   const parent = target.path.includes("/") ? target.path.slice(0, target.path.lastIndexOf("/")) : "";
+  const stampTime = locked ? lockedTime : curTime;
 
   useEffect(() => {
     if (!playable) return;
     let alive = true;
     setUrl(null);
     setErr("");
+    setDiag("");
+    setNoCors(false);
     streamUrl(accountId, target)
-      .then((u) => alive && setUrl(u))
-      .catch((e) => alive && setErr(String(e)));
+      .then((u) => {
+        if (!alive) return;
+        // Let the <video> element try directly (most permissive path). Run a
+        // background probe only to capture a real error message we can show IF
+        // playback fails — never block playback on it.
+        setUrl(u);
+        fetch(u)
+          .then(async (res) => {
+            if (!res.ok) {
+              const body = await res.text().catch(() => "");
+              if (alive) setDiag(`Stream error ${res.status}${body ? ` — ${body.slice(0, 300)}` : ""}`);
+            } else {
+              res.body?.cancel?.();
+            }
+          })
+          .catch(() => {
+            /* probe blocked (e.g. fetch CORS) — ignore; the video may still play */
+          });
+      })
+      .catch((e) => alive && setErr(e instanceof Error ? e.message : String(e)));
     return () => {
       alive = false;
     };
@@ -48,18 +73,18 @@ export function ReviewView({ accountId, target }: { accountId: string; target: R
 
   const comments = useMemo(() => [...review.comments].sort((a, b) => a.time - b.time), [review.comments]);
 
-  function captureTimestamp() {
-    if (pendingTime === null) {
-      videoRef.current?.pause();
-      setPendingTime(videoRef.current?.currentTime ?? 0);
-    }
-  }
   function submit() {
-    const t = pendingTime ?? videoRef.current?.currentTime ?? 0;
     if (!text.trim()) return;
+    const t = locked ? lockedTime : videoRef.current?.currentTime ?? curTime;
     addComment(accountId, target.path, t, text.trim());
     setText("");
-    setPendingTime(null);
+  }
+  function toggleLock() {
+    if (locked) setLocked(false);
+    else {
+      setLockedTime(videoRef.current?.currentTime ?? curTime);
+      setLocked(true);
+    }
   }
   function seekTo(t: number) {
     const v = videoRef.current;
@@ -192,15 +217,25 @@ export function ReviewView({ accountId, target }: { accountId: string; target: R
               <div className="relative flex min-h-0 flex-1 items-center justify-center">
                 {url ? (
                   <video
+                    key={noCors ? "nocors" : "cors"}
                     ref={videoRef}
                     src={url}
-                    crossOrigin="anonymous"
+                    {...(noCors ? {} : { crossOrigin: "anonymous" as const })}
                     controls
                     className="max-h-full max-w-full rounded-[8px]"
                     onLoadedMetadata={(e) => setDuration(e.currentTarget.duration || 0)}
-                    onError={() =>
-                      setErr("The player couldn't decode this file — it's likely a pro codec (ProRes/RAW). Download it to review in your editor.")
-                    }
+                    onTimeUpdate={(e) => setCurTime(e.currentTarget.currentTime)}
+                    onSeeked={(e) => setCurTime(e.currentTarget.currentTime)}
+                    onError={() => {
+                      // First failure may be the CORS handshake (needed only for PDF
+                      // frame-capture) — retry without it so playback still works.
+                      if (!noCors) setNoCors(true);
+                      else
+                        setErr(
+                          diag ||
+                            "The player couldn't decode this file — likely a pro codec (ProRes/RAW). Download it to review in your editor.",
+                        );
+                    }}
                   />
                 ) : (
                   <div className="flex items-center gap-2 text-sm text-[var(--text-2)]">
@@ -266,23 +301,22 @@ export function ReviewView({ accountId, target }: { accountId: string; target: R
 
           {/* Composer */}
           <div className="border-t border-[var(--border)] p-3">
-            <div className="mb-2 flex items-center gap-1.5 text-xs text-[var(--text-3)]">
+            <div className="mb-2 flex items-center gap-2 text-xs text-[var(--text-3)]">
               <MessageSquarePlus size={13} />
-              {pendingTime !== null ? (
-                <span>
-                  Comment at <span className="tnum font-medium text-[var(--accent)]">{timecode(pendingTime)}</span>
-                  <button onClick={() => setPendingTime(videoRef.current?.currentTime ?? 0)} className="ml-2 underline hover:text-[var(--text)]">
-                    update
-                  </button>
-                </span>
-              ) : (
-                <span>Timestamp captured when you start typing.</span>
-              )}
+              <span>
+                Comment at <span className="tnum font-medium text-[var(--accent)]">{timecode(stampTime)}</span>
+              </span>
+              <button
+                onClick={toggleLock}
+                title={locked ? "Pinned — click to follow the playhead" : "Following the playhead — click to pin this time"}
+                className={`ml-auto flex items-center gap-1 ${locked ? "text-[var(--accent)]" : "hover:text-[var(--text)]"}`}
+              >
+                {locked ? <Lock size={12} /> : <Unlock size={12} />} {locked ? "Pinned" : "Live"}
+              </button>
             </div>
             <textarea
               value={text}
               onChange={(e) => setText(e.target.value)}
-              onFocus={captureTimestamp}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                   e.preventDefault();
@@ -293,13 +327,8 @@ export function ReviewView({ accountId, target }: { accountId: string; target: R
               rows={3}
               className="focus-accent w-full resize-none rounded-[8px] border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text-3)]"
             />
-            <div className="mt-2 flex items-center justify-between">
-              {pendingTime !== null && (
-                <button onClick={() => setPendingTime(null)} className="text-xs text-[var(--text-3)] hover:text-[var(--text)]">
-                  Clear timestamp
-                </button>
-              )}
-              <Button variant="primary" onClick={submit} disabled={!text.trim()} className="ml-auto">
+            <div className="mt-2 flex items-center justify-end">
+              <Button variant="primary" onClick={submit} disabled={!text.trim()}>
                 Add comment
               </Button>
             </div>
