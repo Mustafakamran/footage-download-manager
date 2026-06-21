@@ -59,9 +59,9 @@ export function Sidebar() {
 
   return (
     <aside className="flex w-64 shrink-0 flex-col overflow-hidden rounded-[12px] border border-[var(--border)] bg-[var(--surface)]">
-      {/* Accounts */}
-      <div className="px-3 pt-4">
-        <div className="mb-2 flex items-center justify-between px-1">
+      {/* Accounts header */}
+      <div className="shrink-0 px-3 pt-4 pb-2">
+        <div className="flex items-center justify-between px-1">
           <span className="text-[11px] font-semibold tracking-wide text-[var(--text-3)]">ACCOUNTS</span>
           <div className="relative">
             <button
@@ -98,8 +98,11 @@ export function Sidebar() {
             )}
           </div>
         </div>
+      </div>
 
-        <div className="flex flex-col gap-1.5">
+      {/* Accounts list — scrolls when many accounts are connected */}
+      <div className="sidebar-scroll min-h-0 flex-1 overflow-y-auto px-3">
+        <div className="flex flex-col gap-1.5 pb-2">
           {accounts.map((a) => {
             const st = storage[a.id];
             const isActive = activeAccount === a.id;
@@ -143,7 +146,7 @@ export function Sidebar() {
                       e.stopPropagation();
                       setConfirmRemove(confirmRemove === a.id ? null : a.id);
                     }}
-                    className="text-[var(--text-3)] opacity-0 hover:text-[var(--error)] group-hover:opacity-100"
+                    className="shrink-0 text-[var(--text-3)] opacity-60 hover:text-[var(--error)] hover:opacity-100"
                   >
                     <Trash2 size={14} />
                   </button>
@@ -205,7 +208,7 @@ export function Sidebar() {
       </div>
 
       {/* Library */}
-      <div className="mt-5 px-3">
+      <div className="shrink-0 border-t border-[var(--border)] px-3 pt-3">
         <div className="mb-1 px-1 text-[11px] font-semibold tracking-wide text-[var(--text-3)]">LIBRARY</div>
         <div className="flex flex-col">
           {SECTIONS.map(({ key, label, Icon }) => {
@@ -229,7 +232,7 @@ export function Sidebar() {
       </div>
 
       {/* Downloads */}
-      <div className="mt-5 px-3">
+      <div className="shrink-0 px-3 pt-3">
         <div className="mb-1 px-1 text-[11px] font-semibold tracking-wide text-[var(--text-3)]">DOWNLOADS</div>
         <div className="flex flex-col">
           <DownloadStat Icon={Download} label="Downloading" count={counts.downloading} accent onClick={() => showDownloads("active")} active={dlFilter === "active"} />
@@ -240,7 +243,7 @@ export function Sidebar() {
       </div>
 
       {/* Global speed */}
-      <div className="mt-auto flex items-center gap-2.5 border-t border-[var(--border)] px-4 py-3">
+      <div className="mt-3 flex shrink-0 items-center gap-2.5 border-t border-[var(--border)] px-4 py-3">
         <Globe size={16} className="text-[var(--text-3)]" />
         <div>
           <div className="tnum text-sm text-[var(--text)]">{totalSpeed > 0 ? formatSpeed(totalSpeed) : "Idle"}</div>
