@@ -30,13 +30,28 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.rust-target }}
 
+      # Cache cargo registry + the Rust target dir. Deps (tauri, reqwest, …) are
+      # the slow part and rarely change, so even with a version-bumped Cargo.lock
+      # the restore-key brings them back and only our crate recompiles.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          cache-on-failure: true
+
       - name: Install frontend dependencies
         run: npm ci
+
+      - name: Cache the rclone sidecar
+        uses: actions/cache@v4
+        with:
+          path: src-tauri/binaries
+          key: rclone-${{ runner.os }}-${{ hashFiles('scripts/fetch-rclone.mjs') }}
 
       - name: Fetch the rclone sidecar for this OS
         run: npm run fetch:rclone
