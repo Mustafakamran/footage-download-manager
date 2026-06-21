@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { JobStatus } from "../lib/tauri/commands";
+import type { JobStatus, DownloadItem } from "../lib/tauri/commands";
 
 const KEY = "download_history_v1";
 const CAP = 500;
@@ -14,6 +14,9 @@ export interface HistoryEntry {
   at: number;
   /** Failure reason (for failed entries). */
   error?: string;
+  /** Original download item, so a failed entry can be resumed (re-enqueued from
+   * its on-disk partial). Absent on entries recorded before this was added. */
+  item?: DownloadItem;
 }
 
 function load(): HistoryEntry[] {
@@ -34,7 +37,9 @@ function persist(items: HistoryEntry[]) {
 interface HistoryState {
   items: HistoryEntry[];
   recorded: Set<number>;
-  record: (job: JobStatus) => void;
+  record: (job: JobStatus, item?: DownloadItem) => void;
+  /** Drop one entry (e.g. after the user resumes a failed download). */
+  removeEntry: (jobId: number) => void;
   clear: () => void;
 }
 
@@ -44,7 +49,7 @@ export const useHistory = create<HistoryState>((set, get) => {
     items,
     recorded: new Set(items.map((i) => i.jobId)),
 
-    record: (job) => {
+    record: (job, item) => {
       if (!job.finished && !job.cancelled) return;
       if (get().recorded.has(job.jobId)) return;
       const status = job.cancelled ? "cancelled" : job.success ? "success" : "failed";
@@ -57,10 +62,20 @@ export const useHistory = create<HistoryState>((set, get) => {
         status,
         at: Date.now(),
         error: status === "failed" ? job.error : undefined,
+        // Keep the item on failures so the user can resume from history.
+        item: status === "failed" ? item : undefined,
       };
       const recorded = new Set(get().recorded);
       recorded.add(job.jobId);
       const next = [entry, ...get().items].slice(0, CAP);
+      persist(next);
+      set({ items: next, recorded });
+    },
+
+    removeEntry: (jobId) => {
+      const recorded = new Set(get().recorded);
+      recorded.delete(jobId);
+      const next = get().items.filter((i) => i.jobId !== jobId);
       persist(next);
       set({ items: next, recorded });
     },

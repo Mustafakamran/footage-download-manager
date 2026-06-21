@@ -25,8 +25,8 @@ function AccountLabel({ accountId }: { accountId: string }) {
 
 export function DownloadsView({ filter }: { filter: DownloadFilter }) {
   const showDownloads = useApp((s) => s.showDownloads);
-  const { jobs, queue, cancel, pause, resumePaused, removeQueued } = useTransfers();
-  const { items: history, clear } = useHistory();
+  const { jobs, queue, cancel, pause, resumePaused, removeQueued, enqueue } = useTransfers();
+  const { items: history, clear, removeEntry } = useHistory();
 
   const active = jobs.filter((j) => !j.finished && !j.cancelled);
   const showActive = filter === "all" || filter === "active";
@@ -155,9 +155,23 @@ export function DownloadsView({ filter }: { filter: DownloadFilter }) {
                       </div>
                       <span className="tnum w-24 shrink-0 text-right text-sm text-[var(--text-2)]">{formatBytes(h.size)}</span>
                       <span className="tnum w-40 shrink-0 text-right text-xs text-[var(--text-3)]">{new Date(h.at).toLocaleString()}</span>
-                      <span className="flex w-28 shrink-0 items-center justify-end gap-1.5 text-xs" style={{ color: badge.color }}>
-                        <badge.Icon size={14} /> {badge.label}
-                      </span>
+                      {h.status === "failed" && h.item ? (
+                        <button
+                          onClick={() => {
+                            enqueue(h.accountId, [h.item!], h.dest);
+                            removeEntry(h.jobId);
+                          }}
+                          aria-label={`Resume ${h.name}`}
+                          title="Resume from where it stopped"
+                          className="flex w-28 shrink-0 items-center justify-end gap-1.5 text-xs text-[var(--accent)] hover:opacity-80"
+                        >
+                          <Play size={14} /> Resume
+                        </button>
+                      ) : (
+                        <span className="flex w-28 shrink-0 items-center justify-end gap-1.5 text-xs" style={{ color: badge.color }}>
+                          <badge.Icon size={14} /> {badge.label}
+                        </span>
+                      )}
                     </div>
                   );
                 })}

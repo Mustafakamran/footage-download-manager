@@ -182,26 +182,15 @@ export const useTransfers = create<TransfersState>((set, get) => ({
     // (those are kept for resume, not logged as cancelled). Surface real failure
     // reasons as a toast so downloads never fail silently.
     for (const j of jobs) {
-      if ((j.finished || j.cancelled) && !pausedJobIds.has(j.jobId)) useHistory.getState().record(j);
+      // Record finished/cancelled jobs to history (keep the source item on
+      // failures so they can be resumed from the Failed tab). Skip user-paused.
+      if ((j.finished || j.cancelled) && !pausedJobIds.has(j.jobId)) {
+        const inf = get().inflight.find((i) => i.jobId === j.jobId);
+        useHistory.getState().record(j, inf?.item);
+      }
       if (j.finished && !j.success && !j.cancelled && !failedToasted.has(j.jobId)) {
         failedToasted.add(j.jobId);
         useToasts.getState().push(`Download failed · ${j.name}: ${j.error || "unknown error"}`, "error");
-        // Re-queue the failed job as paused so the user can Resume from its partial
-        // (.fdmpart/.fdmmeta on disk) instead of losing all progress. Not auto-started.
-        const inf = get().inflight.find((i) => i.jobId === j.jobId);
-        if (inf && !get().queue.some((q) => q.id === inf.id)) {
-          const paused: QueueItem = {
-            id: inf.id,
-            accountId: inf.accountId,
-            item: inf.item,
-            dest: inf.dest,
-            paused: true,
-            resumedBytes: j.bytes,
-          };
-          const queue = [paused, ...get().queue];
-          writeJson(QUEUE_KEY, queue);
-          set({ queue });
-        }
       }
     }
 
