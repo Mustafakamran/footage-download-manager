@@ -7,6 +7,7 @@ import { useAccountMeta, prettyLabel } from "../store/account-meta";
 import { useToasts } from "../store/toast";
 import { writeBinaryFile } from "../lib/tauri/commands";
 import { streamUrl, isPlayable, timecode } from "../lib/review";
+import { ReviewPlayer } from "./ReviewPlayer";
 import { Button } from "./ui";
 
 const EMPTY_REVIEW: FileReview = { status: "in_progress", comments: [] };
@@ -216,16 +217,14 @@ export function ReviewView({ accountId, target }: { accountId: string; target: R
             <div className="flex min-h-0 flex-1 flex-col">
               <div className="relative flex min-h-0 flex-1 items-center justify-center">
                 {url ? (
-                  <video
-                    key={noCors ? "nocors" : "cors"}
-                    ref={videoRef}
+                  <ReviewPlayer
+                    videoRef={videoRef}
                     src={url}
-                    {...(noCors ? {} : { crossOrigin: "anonymous" as const })}
-                    controls
-                    className="max-h-full max-w-full rounded-[8px]"
-                    onLoadedMetadata={(e) => setDuration(e.currentTarget.duration || 0)}
-                    onTimeUpdate={(e) => setCurTime(e.currentTarget.currentTime)}
-                    onSeeked={(e) => setCurTime(e.currentTarget.currentTime)}
+                    noCors={noCors}
+                    comments={comments}
+                    duration={duration}
+                    onDuration={setDuration}
+                    onTime={setCurTime}
                     onError={() => {
                       // First failure may be the CORS handshake (needed only for PDF
                       // frame-capture) — retry without it so playback still works.
@@ -243,20 +242,6 @@ export function ReviewView({ accountId, target }: { accountId: string; target: R
                   </div>
                 )}
               </div>
-              {/* Comment timeline */}
-              {duration > 0 && (
-                <div className="relative mt-3 h-2 rounded-full bg-[var(--hover)]">
-                  {comments.map((c) => (
-                    <button
-                      key={c.id}
-                      onClick={() => seekTo(c.time)}
-                      title={`${timecode(c.time)} — ${c.text}`}
-                      className="absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-[var(--surface)] bg-[var(--accent)] hover:scale-125"
-                      style={{ left: `${Math.min(100, (c.time / duration) * 100)}%` }}
-                    />
-                  ))}
-                </div>
-              )}
             </div>
           )}
         </div>
