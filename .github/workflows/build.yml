@@ -59,7 +59,10 @@ jobs:
       - name: Build the app (and publish on tag)
         uses: tauri-apps/tauri-action@v0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Publish with a user token (RELEASES_TOKEN) — the default GITHUB_TOKEN
+          # intermittently 403s on release creation ("Resource not accessible by
+          # integration"). Falls back to GITHUB_TOKEN if the secret is unset.
+          GITHUB_TOKEN: ${{ secrets.RELEASES_TOKEN || secrets.GITHUB_TOKEN }}
           # Updater (OTA) signing — add these as GitHub Actions repo secrets.
           # TAURI_SIGNING_PRIVATE_KEY is the contents of .tauri/signing.key
           # (never committed); the password is empty (key generated without one).
