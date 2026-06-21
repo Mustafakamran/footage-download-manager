@@ -117,42 +117,59 @@ fn map_entry(e: &Value) -> Option<Value> {
     }
 }
 
-/// Recursively list a shared link, returning rclone-shaped entries. One
-/// `list_folder` call with `recursive:true`, paginated via `/continue`.
+/// List a shared link's whole tree, returning rclone-shaped entries.
+///
+/// Dropbox does NOT allow `recursive:true` on a `shared_link`, so we walk the
+/// tree ourselves: list each folder non-recursively (paginated via `/continue`)
+/// and enqueue subfolders. Subfolders are listed by passing their path
+/// (relative to the link root, e.g. "/Sub") alongside the same `shared_link`.
 pub fn list_entries(app: &AppHandle, conn: &RcConnection, account_id: &str) -> Result<Vec<Value>, String> {
     let info = link_info(app, account_id).ok_or_else(|| "no Dropbox link info".to_string())?;
     let token = crate::drive::dropbox_access_token(conn, &info.base)?;
 
     let mut out = Vec::new();
-    let mut resp = api_post(
-        &token,
-        LIST_FOLDER,
-        &json!({
-            "path": "",
-            "shared_link": { "url": info.url },
-            "recursive": true,
-            "include_deleted": false,
-            "include_mounted_folders": true,
-            "include_non_downloadable_files": true
-        }),
-    )?;
-    loop {
-        if let Some(entries) = resp.get("entries").and_then(|e| e.as_array()) {
-            for e in entries {
-                if let Some(v) = map_entry(e) {
-                    out.push(v);
+    let mut queue: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+    queue.push_back(String::new()); // "" = link root
+
+    while let Some(dir) = queue.pop_front() {
+        let mut resp = api_post(
+            &token,
+            LIST_FOLDER,
+            &json!({
+                "path": dir,
+                "shared_link": { "url": info.url },
+                "recursive": false,
+                "include_deleted": false,
+                "include_mounted_folders": true,
+                "include_non_downloadable_files": true
+            }),
+        )?;
+        loop {
+            if let Some(entries) = resp.get("entries").and_then(|e| e.as_array()) {
+                for e in entries {
+                    // Recurse into subfolders by their link-relative path.
+                    if e.get(".tag").and_then(|t| t.as_str()) == Some("folder") {
+                        if let Some(pd) = e.get("path_display").and_then(|p| p.as_str()) {
+                            if !pd.is_empty() && pd != "/" {
+                                queue.push_back(pd.to_string());
+                            }
+                        }
+                    }
+                    if let Some(v) = map_entry(e) {
+                        out.push(v);
+                    }
                 }
             }
+            if !resp.get("has_more").and_then(|h| h.as_bool()).unwrap_or(false) {
+                break;
+            }
+            let cursor = resp
+                .get("cursor")
+                .and_then(|c| c.as_str())
+                .ok_or_else(|| "list_folder: missing cursor".to_string())?
+                .to_string();
+            resp = api_post(&token, LIST_FOLDER_CONTINUE, &json!({ "cursor": cursor }))?;
         }
-        if !resp.get("has_more").and_then(|h| h.as_bool()).unwrap_or(false) {
-            break;
-        }
-        let cursor = resp
-            .get("cursor")
-            .and_then(|c| c.as_str())
-            .ok_or_else(|| "list_folder: missing cursor".to_string())?
-            .to_string();
-        resp = api_post(&token, LIST_FOLDER_CONTINUE, &json!({ "cursor": cursor }))?;
     }
     Ok(out)
 }
