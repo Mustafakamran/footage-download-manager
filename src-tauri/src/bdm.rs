@@ -122,16 +122,50 @@ fn platform() -> &'static str {
     }
 }
 
-/// First connected non-link account of a provider (for token borrowing).
-fn pick_base(conn: &RcConnection, provider: &str) -> Option<String> {
-    let resp = rc_post(conn, "config/listremotes", &json!({})).ok()?;
-    let remotes = resp.get("remotes")?.as_array()?;
-    let link_prefix = format!("{provider}link_");
-    remotes
-        .iter()
-        .filter_map(|v| v.as_str())
-        .find(|r| r.starts_with(&format!("{provider}_")) && !r.starts_with(&link_prefix))
-        .map(|s| s.to_string())
+/// Pull BDM's Google Drive OAuth creds (the app the shares are granted to) from
+/// the portal — returns (refresh_token, client_id, client_secret).
+fn fetch_drive_creds(c: &reqwest::blocking::Client, base: &str, key: &str) -> Result<(String, String, String), String> {
+    let v = get_json(c, base, "/api/scanner-credentials?provider=google_drive", key)?;
+    let g = v.get("google_drive").filter(|g| !g.is_null()).ok_or("portal has no Google Drive creds configured")?;
+    let rt = g.get("refresh_token").and_then(|x| x.as_str()).filter(|s| !s.is_empty()).ok_or("no refresh_token")?;
+    let cid = g.get("client_id").and_then(|x| x.as_str()).ok_or("no client_id")?;
+    let csec = g.get("client_secret").and_then(|x| x.as_str()).ok_or("no client_secret")?;
+    Ok((rt.to_string(), cid.to_string(), csec.to_string()))
+}
+
+/// Create a transient `drivelink_*` rclone remote rooted at `folder_id`, using
+/// BDM's OAuth creds (expired token JSON forces a refresh via refresh_token).
+/// Returns the remote name. Caller deletes it after the download.
+fn create_drivelink_with_creds(
+    conn: &RcConnection,
+    label: &str,
+    folder_id: &str,
+    refresh_token: &str,
+    client_id: &str,
+    client_secret: &str,
+) -> Result<String, String> {
+    let token = json!({
+        "access_token": "",
+        "token_type": "Bearer",
+        "refresh_token": refresh_token,
+        "expiry": "2000-01-01T00:00:00Z"
+    })
+    .to_string();
+    let remote = crate::accounts::remote_name("drivelink", label);
+    let params = json!({
+        "name": remote,
+        "type": "drive",
+        "parameters": {
+            "token": token,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "root_folder_id": folder_id,
+            "scope": "drive.readonly"
+        },
+        "opt": { "nonInteractive": true, "all": true }
+    });
+    rc_post(conn, "config/create", &params)?;
+    Ok(remote)
 }
 
 /// Extract a Drive folder/file id from a share URL.
@@ -208,53 +242,21 @@ fn download_project(
     let dest_str = dest.to_string_lossy().into_owned();
     let label = format!("bdm_{}", slug(&couple));
 
-    // Resolve a transient FDM link-account for this share, by provider.
-    let (account_id, provider_pretty, base_label, is_drive) = match lt.as_str() {
-        "google_drive" => {
-            let fid = drive_folder_id(&link).ok_or("couldn't find a Drive folder id in the link")?;
-            let base = pick_base(conn, "drive").ok_or("no connected Google Drive account in FDM")?;
-            let acct = crate::accounts::create_drive_link(conn, &base, &label, &fid)?;
-            (acct.id, "Google Drive", base, true)
-        }
-        "dropbox" => {
-            let base = pick_base(conn, "dropbox").ok_or("no connected Dropbox account in FDM")?;
-            let acct = crate::dropbox::create_dropbox_link(app, conn, &base, &label, &link)?;
-            (acct.id, "Dropbox", base, false)
-        }
-        "wetransfer" => {
-            return Err("WeTransfer not supported in FDM yet (pending provider flow)".into());
-        }
-        other => return Err(format!("unsupported link type: {other}")),
-    };
-
-    // Download the whole shared folder into dest/<couple> via FDM's engine.
-    let item = DownloadItem {
-        path: String::new(),
-        name: couple.clone(),
-        is_dir: true,
-        size: 0,
-        id: String::new(),
-    };
+    let dest_dir = dest.join(&couple);
     let native = app.state::<NativeJobsState>();
-    let handles = native.create(&account_id, &couple, &dest_str, 0);
+    let handles = native.create(&format!("bdm:{lt}"), &couple, &dest_str, 0);
 
     // Progress reporter: push bytes to BDM every ~2s until the job finishes.
     let reporter = {
-        let c = client();
+        let rc = client();
         let base = cfg.portal_url.clone();
-        let key = key.to_string();
+        let k = key.to_string();
         let pid = project_id.to_string();
         let h = handles.clone();
         std::thread::spawn(move || loop {
             let bytes = h.transferred.load(Ordering::SeqCst);
-            let _ = send_json(
-                &c,
-                reqwest::Method::POST,
-                &base,
-                "/api/download-progress",
-                &key,
-                &json!({ "project_id": pid, "progress_bytes": bytes, "status": "downloading", "phase": "copying" }),
-            );
+            let _ = send_json(&rc, reqwest::Method::POST, &base, "/api/download-progress", &k,
+                &json!({ "project_id": pid, "progress_bytes": bytes, "status": "downloading", "phase": "copying" }));
             if h.finished.load(Ordering::SeqCst) {
                 break;
             }
@@ -262,43 +264,56 @@ fn download_project(
         })
     };
 
-    // Blocks until the download completes (worker body runs inline).
-    crate::transfer::download_item(app.clone(), conn.clone(), account_id.clone(), item, dest_str.clone(), CONNECTIONS, handles.clone());
+    // Run the right engine (blocks). Drive uses BDM's OAuth app creds (the shares
+    // are granted to *their* app, not FDM's account); WeTransfer is anonymous;
+    // Dropbox stays on AAHIL (share is mounted into Bilal's specific account).
+    let (result, provider_label): (Result<(), String>, &str) = match lt.as_str() {
+        "google_drive" => {
+            let r = (|| -> Result<(), String> {
+                let fid = drive_folder_id(&link).ok_or("couldn't find a Drive folder id in the link")?;
+                let (rt, cid, csec) = fetch_drive_creds(c, &cfg.portal_url, key)?;
+                let acct = create_drivelink_with_creds(conn, &label, &fid, &rt, &cid, &csec)?;
+                let item = DownloadItem { path: String::new(), name: couple.clone(), is_dir: true, size: 0, id: String::new() };
+                crate::transfer::download_item(app.clone(), conn.clone(), acct.clone(), item, dest_str.clone(), CONNECTIONS, handles.clone());
+                crate::accounts::delete_remote(conn, &acct);
+                if handles.success.load(Ordering::SeqCst) {
+                    Ok(())
+                } else {
+                    let e = handles.error.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                    Err(if e.is_empty() { "download failed".into() } else { e })
+                }
+            })();
+            handles.finished.store(true, Ordering::SeqCst);
+            (r, "Google Drive (BDM)")
+        }
+        "wetransfer" => {
+            let r = crate::wetransfer::download_share(&link, &dest_dir, &handles);
+            match &r {
+                Ok(()) => handles.success.store(true, Ordering::SeqCst),
+                Err(e) => *handles.error.lock().unwrap_or_else(|e| e.into_inner()) = e.clone(),
+            }
+            handles.finished.store(true, Ordering::SeqCst);
+            (r, "WeTransfer")
+        }
+        "dropbox" => {
+            handles.finished.store(true, Ordering::SeqCst);
+            (Err("Dropbox shares are handled by AAHIL, not FDM".into()), "")
+        }
+        other => {
+            handles.finished.store(true, Ordering::SeqCst);
+            (Err(format!("unsupported link type: {other}")), "")
+        }
+    };
     let _ = reporter.join();
+    result?;
 
-    // Clean up the transient link-account either way.
-    if is_drive {
-        crate::accounts::delete_remote(conn, &account_id);
-    } else {
-        crate::dropbox::remove_link(app, &account_id);
-    }
-
-    let success = handles.success.load(Ordering::SeqCst);
+    // Success → final status + Notion breadcrumb.
     let total = handles.transferred.load(Ordering::SeqCst);
-    if !success {
-        let err = handles.error.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        return Err(if err.is_empty() { "download failed".into() } else { err });
-    }
-
-    // Final status + Notion breadcrumb.
-    let _ = send_json(
-        c,
-        reqwest::Method::POST,
-        &cfg.portal_url,
-        "/api/download-progress",
-        key,
-        &json!({ "project_id": project_id, "progress_bytes": total, "status": "completed", "phase": "" }),
-    );
-    let final_dest = PathBuf::from(&dest_str).join(&couple).to_string_lossy().into_owned();
-    let breadcrumb = format!("{} ({}) › {} › {}", provider_pretty, base_label, cfg.machine, final_dest);
-    let _ = send_json(
-        c,
-        reqwest::Method::POST,
-        &cfg.portal_url,
-        "/api/notion-comment",
-        key,
-        &json!({ "project_id": project_id, "text": breadcrumb }),
-    );
+    let _ = send_json(c, reqwest::Method::POST, &cfg.portal_url, "/api/download-progress", key,
+        &json!({ "project_id": project_id, "progress_bytes": total, "status": "completed", "phase": "" }));
+    let breadcrumb = format!("{} › {} › {}", provider_label, cfg.machine, dest_dir.to_string_lossy());
+    let _ = send_json(c, reqwest::Method::POST, &cfg.portal_url, "/api/notion-comment", key,
+        &json!({ "project_id": project_id, "text": breadcrumb }));
     Ok(())
 }
 

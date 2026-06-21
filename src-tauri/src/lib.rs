@@ -9,6 +9,7 @@ pub mod rclone;
 pub mod secrets;
 pub mod stream;
 pub mod transfer;
+pub mod wetransfer;
 
 use base64::Engine;
 use download::{JobsState, NativeJobsState};
