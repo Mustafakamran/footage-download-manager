@@ -6,6 +6,10 @@ on:
     tags:
       - "v*"
 
+# Needed so tauri-action can create the GitHub Release (publish installers + latest.json).
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:

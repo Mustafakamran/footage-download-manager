@@ -1,5 +1,5 @@
 import { execSync, spawnSync } from "node:child_process";
-import { mkdirSync, createWriteStream, existsSync, rmSync, renameSync } from "node:fs";
+import { mkdirSync, createWriteStream, existsSync, rmSync, copyFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { pipeline } from "node:stream/promises";
@@ -49,7 +49,9 @@ if (process.platform === "win32") {
 
 const extractedDir = join(work, assetBase);
 const binName = process.platform === "win32" ? "rclone.exe" : "rclone";
-renameSync(join(extractedDir, binName), finalPath);
+// copy (not rename) — the temp dir and the repo can be on different drives on
+// CI runners (C: vs D: on Windows), where rename throws EXDEV.
+copyFileSync(join(extractedDir, binName), finalPath);
 if (process.platform !== "win32") execSync(`chmod +x '${finalPath}'`);
 rmSync(work, { recursive: true, force: true });
 console.log(`Sidecar ready: ${finalPath}`);
