@@ -20,7 +20,7 @@ export function UpdateBanner() {
           >
             Install &amp; restart
           </button>
-          <button onClick={dismiss} aria-label="Dismiss" className="text-[var(--text-3)] hover:text-[var(--text)]">
+          <button onClick={dismiss} aria-label="Dismiss" title="Dismiss" className="text-[var(--text-3)] hover:text-[var(--text)]">
             <X size={15} />
           </button>
         </div>

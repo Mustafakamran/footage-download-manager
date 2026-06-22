@@ -137,10 +137,10 @@ export function DownloadsView({ filter }: { filter: DownloadFilter }) {
                         {formatBytes(j.bytes)} / {formatBytes(j.totalBytes || j.bytes)} · {formatSpeed(j.speed)} · {formatEta(j.eta)}
                       </span>
                     </div>
-                    <button onClick={() => pause(j.jobId)} aria-label={`Pause ${j.name}`} className="text-[var(--text-3)] hover:text-[var(--accent)]">
+                    <button onClick={() => pause(j.jobId)} aria-label={`Pause ${j.name}`} title="Pause" className="text-[var(--text-3)] hover:text-[var(--accent)]">
                       <Pause size={15} />
                     </button>
-                    <button onClick={() => cancel(j.jobId)} aria-label={`Cancel ${j.name}`} className="text-[var(--text-3)] hover:text-[var(--error)]">
+                    <button onClick={() => cancel(j.jobId)} aria-label={`Cancel ${j.name}`} title="Cancel" className="text-[var(--text-3)] hover:text-[var(--error)]">
                       <X size={15} />
                     </button>
                   </div>
@@ -169,11 +169,11 @@ export function DownloadsView({ filter }: { filter: DownloadFilter }) {
                             : `Queued · #${i + 1}`}
                     </div>
                     {q.paused && (
-                      <button onClick={() => resumePaused(q.id)} aria-label={`Resume ${q.item.name}`} className="text-[var(--text-3)] hover:text-[var(--accent)]">
+                      <button onClick={() => resumePaused(q.id)} aria-label={`Resume ${q.item.name}`} title="Resume" className="text-[var(--text-3)] hover:text-[var(--accent)]">
                         <Play size={15} />
                       </button>
                     )}
-                    <button onClick={() => removeQueued(q.id)} aria-label={`Remove ${q.item.name}`} className="text-[var(--text-3)] hover:text-[var(--error)]">
+                    <button onClick={() => removeQueued(q.id)} aria-label={`Remove ${q.item.name}`} title="Remove from queue" className="text-[var(--text-3)] hover:text-[var(--error)]">
                       <X size={15} />
                     </button>
                   </div>

@@ -79,6 +79,7 @@ export function Sidebar() {
             <button
               onClick={() => setMenuOpen((o) => !o)}
               aria-label="Add account"
+              title="Add account or shared link"
               className="flex h-5 w-5 items-center justify-center rounded-[5px] text-[var(--text-2)] hover:bg-[var(--hover)] hover:text-[var(--text)]"
             >
               <Plus size={15} />
@@ -154,6 +155,7 @@ export function Sidebar() {
                   </div>
                   <button
                     aria-label={`Remove ${a.label}`}
+                    title={`Remove ${a.label}`}
                     onClick={(e) => {
                       e.stopPropagation();
                       setConfirmRemove(confirmRemove === a.id ? null : a.id);
@@ -245,7 +247,17 @@ export function Sidebar() {
 
       {/* Downloads */}
       <div className="shrink-0 px-3 pt-3">
-        <div className="mb-1 px-1 text-[11px] font-semibold tracking-wide text-[var(--text-3)]">DOWNLOADS</div>
+        <div className="mb-1 flex items-center justify-between px-1">
+          <span className="text-[11px] font-semibold tracking-wide text-[var(--text-3)]">DOWNLOADS</span>
+          <button
+            onClick={() => showDownloads("active")}
+            aria-label="Download from a web link"
+            title="Download a file from a URL"
+            className="flex items-center gap-1 rounded-[5px] px-1.5 py-0.5 text-[11px] font-medium text-[var(--accent)] hover:bg-[var(--hover)]"
+          >
+            <Globe size={12} /> URL
+          </button>
+        </div>
         <div className="flex flex-col">
           <DownloadStat Icon={Download} label="Downloading" count={counts.downloading} accent onClick={() => showDownloads("active")} active={dlFilter === "active"} />
           <DownloadStat Icon={Check} label="Completed" count={counts.completed} onClick={() => showDownloads("completed")} active={dlFilter === "completed"} />

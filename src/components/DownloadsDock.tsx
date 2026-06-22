@@ -52,11 +52,11 @@ function QueueRow({ q, position, labelOf }: { q: QueueItem; position: number; la
               : `Queued · #${position}`}
       </div>
       {q.paused && (
-        <button onClick={() => resumePaused(q.id)} aria-label={`Resume ${q.item.name}`} className="flex h-7 w-7 items-center justify-center rounded-full text-[var(--text-3)] hover:bg-[var(--hover)] hover:text-[var(--accent)]">
+        <button onClick={() => resumePaused(q.id)} aria-label={`Resume ${q.item.name}`} title="Resume" className="flex h-7 w-7 items-center justify-center rounded-full text-[var(--text-3)] hover:bg-[var(--hover)] hover:text-[var(--accent)]">
           <Play size={15} />
         </button>
       )}
-      <button onClick={() => removeQueued(q.id)} aria-label={`Remove ${q.item.name} from queue`} className="flex h-7 w-7 items-center justify-center rounded-full text-[var(--text-3)] hover:bg-[var(--hover)] hover:text-[var(--error)]">
+      <button onClick={() => removeQueued(q.id)} aria-label={`Remove ${q.item.name} from queue`} title="Remove from queue" className="flex h-7 w-7 items-center justify-center rounded-full text-[var(--text-3)] hover:bg-[var(--hover)] hover:text-[var(--error)]">
         <X size={15} />
       </button>
     </div>
@@ -112,8 +112,8 @@ function Row({ job, labelOf }: { job: JobStatus; labelOf: LabelOf }) {
       </span>
       {active ? (
         <div className="flex items-center gap-0.5">
-          <button onClick={() => pause(job.jobId)} aria-label={`Pause ${job.name}`} className="flex h-7 w-7 items-center justify-center rounded-full text-[var(--text-3)] hover:bg-[var(--hover)] hover:text-[var(--accent)]"><Pause size={15} /></button>
-          <button onClick={() => cancel(job.jobId)} aria-label={`Cancel ${job.name}`} className="flex h-7 w-7 items-center justify-center rounded-full text-[var(--text-3)] hover:bg-[var(--hover)] hover:text-[var(--error)]"><X size={15} /></button>
+          <button onClick={() => pause(job.jobId)} aria-label={`Pause ${job.name}`} title="Pause" className="flex h-7 w-7 items-center justify-center rounded-full text-[var(--text-3)] hover:bg-[var(--hover)] hover:text-[var(--accent)]"><Pause size={15} /></button>
+          <button onClick={() => cancel(job.jobId)} aria-label={`Cancel ${job.name}`} title="Cancel" className="flex h-7 w-7 items-center justify-center rounded-full text-[var(--text-3)] hover:bg-[var(--hover)] hover:text-[var(--error)]"><X size={15} /></button>
         </div>
       ) : (
         <span className="w-7" />
@@ -145,7 +145,7 @@ export function DownloadsDock() {
   return (
     <div className="shrink-0 overflow-hidden rounded-[12px] border border-[var(--border)] bg-[var(--surface)]">
       <div className="flex items-center justify-between px-6 py-2.5">
-        <button onClick={() => setOpen((o) => !o)} className="flex items-center gap-2 text-sm font-medium text-[var(--text)]">
+        <button onClick={() => setOpen((o) => !o)} title={open ? "Collapse" : "Expand"} className="flex items-center gap-2 text-sm font-medium text-[var(--text)]">
           {open ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
           Downloading <span className="tnum text-[var(--text-2)]">({active.length})</span>
           {queue.length > 0 && <span className="tnum text-[var(--text-3)]">· {queue.length} queued</span>}

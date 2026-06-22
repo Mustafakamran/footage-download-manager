@@ -160,6 +160,8 @@ export function SettingsView() {
               min={1}
               value={concurrency}
               onChange={(e) => setConcurrency(Number(e.target.value))}
+              aria-label="Simultaneous downloads"
+              title="How many files download at once"
               className="focus-accent w-24 rounded-[6px] border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
             />
           </Card>
@@ -237,7 +239,7 @@ export function SettingsView() {
             to it, and reports status + a location note back. Downloads use your connected Drive/Dropbox accounts.
           </p>
           <div className="flex flex-col gap-3">
-            <label className="flex items-center gap-2 text-sm text-[var(--text)]">
+            <label className="flex items-center gap-2 text-sm text-[var(--text)]" title="Pick up downloads assigned to this machine from the BDM portal">
               <input type="checkbox" checked={bdm.enabled} onChange={(e) => setBdm((b) => ({ ...b, enabled: e.target.checked }))} />
               Enable sync agent
             </label>

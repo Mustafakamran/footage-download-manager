@@ -428,6 +428,7 @@ export function ReviewPlayer({ videoRef, src, hlsSrc, noCors, comments, duration
               }
             }}
             aria-label="Volume"
+            title="Volume"
             className="h-1 w-16 cursor-pointer accent-[var(--accent)]"
           />
 
@@ -471,6 +472,7 @@ export function ReviewPlayer({ videoRef, src, hlsSrc, noCors, comments, duration
                 onClick={() => setSpeedOpen((o) => !o)}
                 className="flex items-center gap-1 rounded px-2 py-1 text-xs text-white hover:bg-white/15"
                 aria-label="Playback speed"
+                title="Playback speed"
               >
                 <Gauge size={16} /> {speed}×
               </button>
