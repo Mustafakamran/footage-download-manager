@@ -4,11 +4,32 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_shell::{process::CommandChild, ShellExt};
 
 /// Connection info shared with the frontend.
+///
+/// Carries ONE shared `reqwest::blocking::Client` (internally `Arc`-based:
+/// `Clone`, `Send`, `Sync`, with a keep-alive connection pool). Building it once
+/// and reusing it for every rc call avoids a fresh TCP/HTTP handshake — and the
+/// blocking stall that handshake costs — on each rclone interaction. The client
+/// is skipped during serialization since only the connection coordinates travel
+/// to the frontend.
 #[derive(Clone, serde::Serialize)]
 pub struct RcConnection {
     pub base_url: String,
     pub user: String,
     pub pass: String,
+    #[serde(skip)]
+    client: reqwest::blocking::Client,
+}
+
+impl RcConnection {
+    /// Build a connection, constructing the shared HTTP client once.
+    pub fn new(base_url: String, user: String, pass: String) -> Self {
+        RcConnection {
+            base_url,
+            user,
+            pass,
+            client: reqwest::blocking::Client::new(),
+        }
+    }
 }
 
 /// Holds the running rclone child + connection; lives in Tauri managed state.
@@ -45,11 +66,11 @@ pub fn start_rclone(app: &AppHandle) -> Result<RcConnection, String> {
         .args(args);
     let (_rx, child) = sidecar.spawn().map_err(|e| format!("spawn: {e}"))?;
 
-    let connection = RcConnection {
-        base_url: format!("http://{}:{}", cfg.host, cfg.port),
-        user: cfg.user,
-        pass: cfg.pass,
-    };
+    let connection = RcConnection::new(
+        format!("http://{}:{}", cfg.host, cfg.port),
+        cfg.user,
+        cfg.pass,
+    );
 
     wait_until_ready(&connection)?;
 
@@ -61,10 +82,11 @@ pub fn start_rclone(app: &AppHandle) -> Result<RcConnection, String> {
 
 /// Poll `core/version` until the daemon responds or we time out.
 pub fn wait_until_ready(conn: &RcConnection) -> Result<(), String> {
-    let client = reqwest::blocking::Client::new();
+    // Reuse the connection's shared keep-alive client (no per-poll handshake).
     let url = format!("{}/core/version", conn.base_url);
     for _ in 0..50 {
-        let resp = client
+        let resp = conn
+            .client
             .post(&url)
             .basic_auth(&conn.user, Some(&conn.pass))
             .send();
@@ -84,10 +106,12 @@ pub fn rc_post(
     endpoint: &str,
     params: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let client = reqwest::blocking::Client::new();
+    // Reuse the connection's shared keep-alive client instead of building a fresh
+    // one (and paying a new TCP/HTTP handshake) on every rc call.
     let url = format!("{}/{}", conn.base_url, endpoint);
     let body = serde_json::to_string(params).map_err(|e| e.to_string())?;
-    let resp = client
+    let resp = conn
+        .client
         .post(&url)
         .basic_auth(&conn.user, Some(&conn.pass))
         .header("Content-Type", "application/json")

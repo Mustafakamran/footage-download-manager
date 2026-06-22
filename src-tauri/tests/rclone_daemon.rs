@@ -71,11 +71,11 @@ fn rclone_daemon_answers_core_version() {
         .expect("spawn rclone rcd");
     let _guard = ChildGuard(child);
 
-    let connection = RcConnection {
-        base_url: format!("http://{}:{}", cfg.host, cfg.port),
-        user: cfg.user.clone(),
-        pass: cfg.pass.clone(),
-    };
+    let connection = RcConnection::new(
+        format!("http://{}:{}", cfg.host, cfg.port),
+        cfg.user.clone(),
+        cfg.pass.clone(),
+    );
 
     // 1. Reuse the supervisor's health-check.
     wait_until_ready(&connection).expect("rclone daemon became ready");
@@ -145,11 +145,11 @@ fn rclone_daemon_listremotes_empty_with_temp_config() {
         .expect("spawn rclone rcd");
     let _guard = ChildGuard(child);
 
-    let connection = RcConnection {
-        base_url: format!("http://{}:{}", cfg.host, cfg.port),
-        user: cfg.user.clone(),
-        pass: cfg.pass.clone(),
-    };
+    let connection = RcConnection::new(
+        format!("http://{}:{}", cfg.host, cfg.port),
+        cfg.user.clone(),
+        cfg.pass.clone(),
+    );
 
     wait_until_ready(&connection).expect("rclone daemon became ready");
 
@@ -208,11 +208,11 @@ fn rclone_async_copyfile_completes_locally() {
     let child = Command::new(&binary).args(&args).spawn().expect("spawn rclone rcd");
     let _guard = ChildGuard(child);
 
-    let connection = RcConnection {
-        base_url: format!("http://{}:{}", cfg.host, cfg.port),
-        user: cfg.user.clone(),
-        pass: cfg.pass.clone(),
-    };
+    let connection = RcConnection::new(
+        format!("http://{}:{}", cfg.host, cfg.port),
+        cfg.user.clone(),
+        cfg.pass.clone(),
+    );
     wait_until_ready(&connection).expect("rclone daemon became ready");
 
     // Build the copy request via the production helper (local fs as "account").

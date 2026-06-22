@@ -27,8 +27,20 @@ use std::sync::{Arc, Condvar, Mutex};
 /// Segment length in seconds. Each `.ts` covers one of these windows.
 pub const SEG_DUR: f64 = 6.0;
 
-/// Default cap on concurrent ffmpeg processes.
+/// Default cap on concurrent ffmpeg processes. Used as the initial permit count
+/// before the encoder is chosen; `setup` then resizes the semaphore to the
+/// encoder-aware effective limit (see `concurrency_for`).
 pub const MAX_CONCURRENT_FFMPEG: usize = 3;
+
+/// How many segments ahead of the requested one to warm on background threads.
+/// Prefetch covers `n+1..=n+PREFETCH`, bounded to the last segment, and only
+/// runs when an ffmpeg permit is free (it never blocks a live request).
+pub const PREFETCH: u64 = 4;
+
+/// Consecutive hardware-encode failures before the session permanently downgrades
+/// to libx264. A single mid-playback failure only retries that one segment on
+/// software (the hardware choice is kept) — we don't pin software off one blip.
+pub const HW_FAILURE_DOWNGRADE_THRESHOLD: u32 = 3;
 
 /// LRU segment-cache size cap (~2 GB).
 pub const CACHE_CAP_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -162,6 +174,34 @@ impl Encoder {
     }
 }
 
+/// Effective concurrent-ffmpeg limit for the chosen encoder. Hardware encoders
+/// (videotoolbox/nvenc/qsv/amf) offload to a dedicated ASIC, so several can run
+/// at once (4) without pegging the CPU; software (libx264) saturates CPU cores,
+/// so we cap it low (2) — and pair it with a per-process `-threads` cap (see
+/// `ffmpeg_args`) so one software transcode can't freeze the whole app.
+pub fn concurrency_for(encoder: Encoder) -> usize {
+    if encoder.is_hardware() {
+        4
+    } else {
+        2
+    }
+}
+
+/// Per-process libx264 thread cap: about half the logical cores, min 2. Capping
+/// software-encode threads stops a single transcode from pegging every core and
+/// freezing the whole app. `logical_cores` is the machine's logical CPU count.
+pub fn libx264_threads(logical_cores: usize) -> usize {
+    (logical_cores / 2).max(2)
+}
+
+/// Logical CPU count for sizing the libx264 `-threads` cap, defaulting to 2 if
+/// the platform can't report it.
+fn logical_cores() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(2)
+}
+
 /// Pick the best available H.264 encoder for `os` from ffmpeg's encoder list.
 /// macOS: `h264_videotoolbox` else `libx264`. Windows: nvenc > qsv > amf > libx264.
 /// Anything else (Linux/dev): libx264. `available` holds encoder names as printed
@@ -230,6 +270,10 @@ pub fn ffmpeg_args(input: &str, start: f64, dur: f64, rend: &Rendition, encoder:
     if matches!(encoder, Encoder::Libx264) {
         a.push("-preset".into());
         a.push("veryfast".into());
+        // Cap software-encode threads (~half the logical cores, min 2) so a single
+        // libx264 transcode can't peg every core and freeze the whole app.
+        a.push("-threads".into());
+        a.push(libx264_threads(logical_cores()).to_string());
     }
     a.push("-b:v".into());
     a.push(format!("{}k", rend.v_kbps));
@@ -438,6 +482,9 @@ impl Semaphore {
     fn new(permits: usize) -> Self {
         Semaphore { inner: Mutex::new(permits), cv: Condvar::new() }
     }
+
+    /// Block until a permit is free, then take it. Used by on-demand (live,
+    /// player-requested) segments, which must always eventually get a permit.
     fn acquire(self: &Arc<Self>) -> SemaphoreGuard {
         let mut n = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         while *n == 0 {
@@ -445,6 +492,25 @@ impl Semaphore {
         }
         *n -= 1;
         SemaphoreGuard { sem: Arc::clone(self) }
+    }
+
+    /// Take a permit only if one is immediately free, else return `None`. Used by
+    /// prefetch so background warming never waits behind — or starves — a live
+    /// request: when every permit is busy serving on-demand segments, prefetch
+    /// simply backs off.
+    fn try_acquire(self: &Arc<Self>) -> Option<SemaphoreGuard> {
+        let mut n = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if *n == 0 {
+            return None;
+        }
+        *n -= 1;
+        Some(SemaphoreGuard { sem: Arc::clone(self) })
+    }
+
+    /// Resize the permit pool. Only safe at setup, before any transcode is in
+    /// flight (all permits free), so we just overwrite the available count.
+    fn set_permits(&self, permits: usize) {
+        *self.inner.lock().unwrap_or_else(|e| e.into_inner()) = permits;
     }
 }
 
@@ -518,8 +584,12 @@ pub struct HlsRuntime {
     pub cache_dir: Mutex<Option<PathBuf>>,
     /// Source-key → probe result.
     probes: Mutex<HashMap<String, Probe>>,
-    /// Chosen encoder; downgraded to libx264 for the session if hw transcode fails.
+    /// Chosen encoder; downgraded to libx264 for the session only after several
+    /// consecutive hw transcode failures (a single mid-playback failure is not
+    /// enough — see `record_hw_failure`).
     encoder: Mutex<Option<Encoder>>,
+    /// Count of consecutive hardware-encode failures; reset on any hw success.
+    consecutive_hw_failures: Mutex<u32>,
     /// Per-source single-flight: so a source is probed once even under concurrency.
     probe_lock: Mutex<()>,
     cache: Mutex<SegmentCache>,
@@ -536,6 +606,7 @@ impl Default for HlsRuntime {
             cache_dir: Mutex::new(None),
             probes: Mutex::new(HashMap::new()),
             encoder: Mutex::new(None),
+            consecutive_hw_failures: Mutex::new(0),
             probe_lock: Mutex::new(()),
             cache: Mutex::new(SegmentCache::default()),
             sem: Arc::new(Semaphore::new(MAX_CONCURRENT_FFMPEG)),
@@ -568,8 +639,23 @@ impl HlsRuntime {
             .unwrap_or(Encoder::Libx264)
     }
 
-    fn downgrade_to_software(&self) {
-        *self.encoder.lock().unwrap_or_else(|e| e.into_inner()) = Some(Encoder::Libx264);
+    /// Record a hardware-encode failure. Bumps the consecutive-failure counter and,
+    /// only once it reaches `HW_FAILURE_DOWNGRADE_THRESHOLD`, permanently pins the
+    /// session to libx264. Returns `true` if this call triggered the downgrade.
+    fn record_hw_failure(&self) -> bool {
+        let mut fails = self.consecutive_hw_failures.lock().unwrap_or_else(|e| e.into_inner());
+        *fails += 1;
+        if *fails >= HW_FAILURE_DOWNGRADE_THRESHOLD {
+            *self.encoder.lock().unwrap_or_else(|e| e.into_inner()) = Some(Encoder::Libx264);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Reset the consecutive hardware-failure counter after a hw-encode success.
+    fn record_hw_success(&self) {
+        *self.consecutive_hw_failures.lock().unwrap_or_else(|e| e.into_inner()) = 0;
     }
 
     fn cache_get(&self, key: &str) -> Option<PathBuf> {
@@ -621,15 +707,57 @@ pub fn setup(app: &tauri::AppHandle) {
         }
     }
 
-    // Probe the ffmpeg encoder list once and pick the best for this OS.
+    // Probe the ffmpeg encoder list once and pick the best for this OS, then VERIFY
+    // a hardware pick actually encodes a frame (some machines advertise an encoder
+    // that fails at runtime) — falling back to libx264 if it doesn't.
     let encoder = match rt.ffmpeg() {
         Ok(ffmpeg) => {
             let available = list_encoders(&ffmpeg);
-            pick_encoder(&available, std::env::consts::OS)
+            let picked = pick_encoder(&available, std::env::consts::OS);
+            if picked.is_hardware() && !verify_encoder(&ffmpeg, picked) {
+                eprintln!(
+                    "hls: {} advertised but failed a one-frame test encode — falling back to libx264",
+                    picked.ffmpeg_name()
+                );
+                Encoder::Libx264
+            } else {
+                picked
+            }
         }
         Err(_) => Encoder::Libx264,
     };
+    eprintln!("hls: selected encoder {}", encoder.ffmpeg_name());
     *rt.encoder.lock().unwrap_or_else(|e| e.into_inner()) = Some(encoder);
+
+    // Size the ffmpeg-concurrency semaphore to the chosen encoder: hardware can run
+    // several at once, software is capped low so it can't saturate the CPU.
+    rt.sem.set_permits(concurrency_for(encoder));
+}
+
+/// Verify an encoder actually works by encoding a single synthetic frame to null.
+/// Returns true on success. Catches machines that advertise a hardware encoder in
+/// `-encoders` but fail to initialize it at runtime.
+fn verify_encoder(ffmpeg: &std::path::Path, encoder: Encoder) -> bool {
+    std::process::Command::new(ffmpeg)
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=320x240:rate=1",
+            "-frames:v",
+            "1",
+            "-c:v",
+            encoder.ffmpeg_name(),
+            "-f",
+            "null",
+            "-",
+        ])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 /// Best-effort cleanup of the HLS cache dir on app exit.
@@ -706,14 +834,25 @@ fn rendition_for(probe: &Probe, height: u32) -> Rendition {
 }
 
 /// Produce (or read from cache) the transcoded `.ts` bytes for segment `n` of a
-/// rendition. Spawns ffmpeg synchronously to stdout. On a hardware-encoder
-/// failure, retries once with libx264 and remembers software for the session.
+/// rendition. Spawns ffmpeg synchronously to stdout.
+///
+/// `prefetch` distinguishes background warming from live (player-requested)
+/// segments: a live request *blocks* for an ffmpeg permit (it must always be
+/// served), while a prefetch only `try_acquire`s — if every permit is busy
+/// serving on-demand segments it backs off (returns `Err`) rather than starve
+/// them.
+///
+/// On a hardware-encoder failure, the failed segment is retried once with
+/// libx264 (so playback continues), but the hardware choice is *kept*; only after
+/// `HW_FAILURE_DOWNGRADE_THRESHOLD` consecutive hw failures does the session
+/// permanently downgrade to software. A hw success resets that counter.
 fn produce_segment(
     state: &HlsRuntime,
     src: &HlsSource,
     rend: &Rendition,
     n: u64,
     probe: &Probe,
+    prefetch: bool,
 ) -> Result<Vec<u8>, String> {
     let cache_key = format!("{}|{}|{}", src.key, rend.height, n);
     if let Some(path) = state.cache_get(&cache_key) {
@@ -727,18 +866,41 @@ fn produce_segment(
         return Err("segment out of range".into());
     }
 
-    let _permit = state.sem.acquire();
+    // Live requests block for a permit; prefetch yields when none is free so it
+    // never queues ahead of — or starves — an on-demand segment.
+    let _permit = if prefetch {
+        match state.sem.try_acquire() {
+            Some(p) => p,
+            None => return Err("prefetch skipped: no free ffmpeg permit".into()),
+        }
+    } else {
+        state.sem.acquire()
+    };
     let ffmpeg = state.ffmpeg()?;
     let input = src.input.as_ffmpeg_input().to_string();
 
     let encoder = state.current_encoder();
     let bytes = match run_ffmpeg(&ffmpeg, &input, start, dur, rend, encoder) {
-        Ok(b) => b,
+        Ok(b) => {
+            if encoder.is_hardware() {
+                state.record_hw_success();
+            }
+            b
+        }
         Err(e) if encoder.is_hardware() => {
-            // Hardware path failed — fall back to software for this segment and
-            // remember it for the rest of the session.
-            eprintln!("hls: {} failed ({e}); retrying with libx264", encoder.ffmpeg_name());
-            state.downgrade_to_software();
+            // Hardware path failed — retry THIS segment on software so playback
+            // continues, but keep the hardware choice. Only after several
+            // consecutive hw failures do we pin software for the session.
+            let downgraded = state.record_hw_failure();
+            if downgraded {
+                eprintln!(
+                    "hls: {} failed ({e}); {} consecutive failures — downgrading session to libx264",
+                    encoder.ffmpeg_name(),
+                    HW_FAILURE_DOWNGRADE_THRESHOLD
+                );
+            } else {
+                eprintln!("hls: {} failed ({e}); retrying this segment with libx264", encoder.ffmpeg_name());
+            }
             run_ffmpeg(&ffmpeg, &input, start, dur, rend, Encoder::Libx264)?
         }
         Err(e) => return Err(e),
@@ -779,31 +941,49 @@ fn run_ffmpeg(
     Ok(out.stdout)
 }
 
-/// Best-effort prefetch of segment `n+1` on a background thread (skips if already
-/// cached or already in flight). Bounded by the same ffmpeg semaphore.
-fn prefetch_next(
+/// The inclusive prefetch window `[n+1, last]` for a request at segment `n`: warm
+/// up to `PREFETCH` segments ahead, bounded to the final segment index so we never
+/// prefetch past the end. Returns an empty range when `n` is the last segment.
+pub fn prefetch_window(n: u64, seg_dur: f64, duration: f64) -> std::ops::RangeInclusive<u64> {
+    let count = segment_count(duration, seg_dur);
+    let first = n + 1;
+    // No segments, or `n` is already at/after the last → empty window. Use a
+    // start-after-end inclusive range (first..=first-1) so the result `.is_empty()`.
+    if count == 0 || first >= count {
+        return first..=first.saturating_sub(1);
+    }
+    let last = count - 1;
+    let upper = (n + PREFETCH).min(last);
+    first..=upper
+}
+
+/// Best-effort prefetch of the WINDOW `n+1..=n+PREFETCH` (bounded to the last
+/// segment) on background threads. Each candidate is deduped against the cache and
+/// any in-flight transcode, and runs with `prefetch=true` so it only proceeds when
+/// an ffmpeg permit is free — never queuing ahead of a live request.
+fn prefetch_window_segments(
     state: Arc<HlsRuntime>,
     src: HlsSource,
     rend: Rendition,
     n: u64,
     probe: Probe,
 ) {
-    let next = n + 1;
-    if (next as f64) * SEG_DUR >= probe.duration {
-        return; // No next segment.
-    }
-    let key = format!("{}|{}|{}", src.key, rend.height, next);
-    {
-        let mut inflight = state.prefetching.lock().unwrap_or_else(|e| e.into_inner());
-        if state.cache_get(&key).is_some() || inflight.contains(&key) {
-            return;
+    for next in prefetch_window(n, SEG_DUR, probe.duration) {
+        let key = format!("{}|{}|{}", src.key, rend.height, next);
+        {
+            let mut inflight = state.prefetching.lock().unwrap_or_else(|e| e.into_inner());
+            if state.cache_get(&key).is_some() || inflight.contains(&key) {
+                continue;
+            }
+            inflight.insert(key.clone());
         }
-        inflight.insert(key.clone());
+        let state = Arc::clone(&state);
+        let src = src.clone();
+        std::thread::spawn(move || {
+            let _ = produce_segment(&state, &src, &rend, next, &probe, true);
+            state.prefetching.lock().unwrap_or_else(|e| e.into_inner()).remove(&key);
+        });
     }
-    std::thread::spawn(move || {
-        let _ = produce_segment(&state, &src, &rend, next, &probe);
-        state.prefetching.lock().unwrap_or_else(|e| e.into_inner()).remove(&key);
-    });
 }
 
 /// Outcome of handling an HLS request, ready for `stream.rs` to turn into a
@@ -850,9 +1030,10 @@ pub fn handle(
         }
         HlsRoute::Segment { height, n } => {
             let rend = rendition_for(&probe, height);
-            let bytes = produce_segment(&rt, &src, &rend, n, &probe)?;
+            // Live (player-requested) segment: blocks for a permit so it always wins.
+            let bytes = produce_segment(&rt, &src, &rend, n, &probe, false)?;
             // Best-effort prefetch of the next window on the shared runtime.
-            prefetch_next(rt, src, rend, n, probe);
+            prefetch_window_segments(rt, src, rend, n, probe);
             Ok(HlsResponse::Segment(bytes))
         }
     }
@@ -1094,6 +1275,71 @@ mod tests {
     fn parse_probe_errors_without_video_or_duration() {
         assert!(parse_probe(r#"{"format":{"duration":"10"},"streams":[{"codec_type":"audio"}]}"#).is_err());
         assert!(parse_probe(r#"{"streams":[{"codec_type":"video","height":720}]}"#).is_err());
+    }
+
+    #[test]
+    fn libx264_args_include_threads_cap() {
+        let rend = Rendition { height: 720, width: 1280, v_kbps: 2800, a_kbps: 128 };
+        let args = ffmpeg_args("/abs/clip.mov", 0.0, 6.0, &rend, Encoder::Libx264);
+        // libx264 must carry a -threads cap so one software transcode can't peg
+        // every core. The value equals libx264_threads(logical_cores).
+        let t = args.iter().position(|a| a == "-threads").expect("libx264 has -threads");
+        let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2);
+        assert_eq!(args[t + 1], libx264_threads(cores).to_string());
+    }
+
+    #[test]
+    fn hardware_args_have_no_threads_cap() {
+        // The -threads cap is software-only; hardware encoders manage their own.
+        let rend = Rendition { height: 1080, width: 1920, v_kbps: 5000, a_kbps: 128 };
+        let args = ffmpeg_args("/abs/clip.mov", 0.0, 6.0, &rend, Encoder::VideoToolbox);
+        assert!(!args.iter().any(|a| a == "-threads"));
+    }
+
+    #[test]
+    fn libx264_threads_is_half_cores_min_two() {
+        assert_eq!(libx264_threads(16), 8);
+        assert_eq!(libx264_threads(8), 4);
+        assert_eq!(libx264_threads(4), 2);
+        // Below 4 cores clamps to the floor of 2.
+        assert_eq!(libx264_threads(3), 2);
+        assert_eq!(libx264_threads(2), 2);
+        assert_eq!(libx264_threads(1), 2);
+        assert_eq!(libx264_threads(0), 2);
+    }
+
+    #[test]
+    fn concurrency_is_encoder_aware() {
+        // Hardware encoders can run several at once (4); software is capped low (2).
+        assert_eq!(concurrency_for(Encoder::VideoToolbox), 4);
+        assert_eq!(concurrency_for(Encoder::Nvenc), 4);
+        assert_eq!(concurrency_for(Encoder::Qsv), 4);
+        assert_eq!(concurrency_for(Encoder::Amf), 4);
+        assert_eq!(concurrency_for(Encoder::Libx264), 2);
+    }
+
+    #[test]
+    fn prefetch_window_warms_up_to_prefetch_ahead() {
+        // 60s @ 6s → 10 segments, indices 0..=9.
+        // Mid-stream request: warm n+1..=n+PREFETCH.
+        assert_eq!(prefetch_window(0, 6.0, 60.0), 1..=4);
+        assert_eq!(prefetch_window(2, 6.0, 60.0), 3..=6);
+    }
+
+    #[test]
+    fn prefetch_window_is_bounded_to_last_segment() {
+        // 10 segments (0..=9). Near the end the window clamps to index 9.
+        assert_eq!(prefetch_window(7, 6.0, 60.0), 8..=9);
+        // On the last segment there is nothing ahead → empty range.
+        let w = prefetch_window(9, 6.0, 60.0);
+        assert!(w.is_empty());
+        // Past the last segment is also empty.
+        assert!(prefetch_window(20, 6.0, 60.0).is_empty());
+    }
+
+    #[test]
+    fn prefetch_window_empty_for_zero_duration() {
+        assert!(prefetch_window(0, 6.0, 0.0).is_empty());
     }
 
     #[test]
