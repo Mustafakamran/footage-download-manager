@@ -81,6 +81,8 @@ pub fn run() {
             drive::drive_uploader,
             index::index_start,
             index::index_recrawl,
+            index::index_folder,
+            index::index_cancel,
             index::index_get,
             index::index_status,
             index::index_remove,

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Download, Loader2, AlertCircle, List as ListIcon, LayoutGrid, RefreshCw, Star, ChevronDown, Check, Play } from "lucide-react";
+import { Download, Loader2, AlertCircle, List as ListIcon, LayoutGrid, RefreshCw, Star, ChevronDown, Check, Play, FolderSearch } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useApp, type Section, type ReviewTarget } from "../store/app";
 import { isVideo, extOf } from "../lib/review";
@@ -14,6 +14,7 @@ import { ProviderIcon } from "./icons";
 import { Button } from "./ui";
 import { fileType } from "../lib/file-types";
 import { recentFiles, itemAt } from "../lib/account-index";
+import { IndexProgress } from "./IndexProgress";
 import { formatBytes, formatDate } from "../lib/format";
 import type { RcItem } from "../lib/rc/browse";
 import type { Account, DownloadItem } from "../lib/tauri/commands";
@@ -57,6 +58,9 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
   const aggOf = (p: string) => index?.agg[p];
   const sizeOf = (i: RcItem) => (i.IsDir ? aggOf(i.Path)?.size ?? 0 : Math.max(0, i.Size));
   const dateOf = (i: RcItem) => (i.IsDir ? aggOf(i.Path)?.latest ?? "" : i.ModTime);
+  // A folder is "indexed" once the crawl has captured its subtree (children or aggregate present).
+  const folderIndexed = (p: string) => !!(index && (index.agg[p] || index.tree[p]));
+  const indexFolder = (folderPath: string) => void useIndex.getState().indexFolder(account, folderPath);
   const reviewTarget = (i: RcItem): ReviewTarget => ({ path: i.Path, name: i.Name, fileId: i.ID ?? "", size: sizeOf(i), ext: extOf(i.Name) });
 
   // Live fallback for folder views the crawl didn't capture.
@@ -140,24 +144,13 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
   return (
     <div className="flex h-full min-h-0 flex-col">
       {/* Crawl progress */}
-      {showCrawl && (
+      {status === "loading" && (
         <div className="flex items-center gap-3 border-b border-[var(--border)] bg-[var(--surface)] px-5 py-2.5 text-sm text-[var(--text-2)]">
           <Loader2 size={15} className="animate-spin text-[var(--accent)]" />
-          {status === "loading" ? (
-            <span>Loading cached index…</span>
-          ) : (
-            <>
-              <span className="whitespace-nowrap">
-                Indexing · <span className="tnum">{entry?.progress.done ?? 0}/{entry?.progress.total ?? 0}</span> folders ·{" "}
-                <span className="tnum">{(entry?.progress.files ?? 0).toLocaleString()}</span> files
-              </span>
-              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[var(--hover)]">
-                <div className="h-full rounded-full bg-[var(--accent)] transition-[width]" style={{ width: entry?.progress.total ? `${Math.round((entry.progress.done / entry.progress.total) * 100)}%` : "8%" }} />
-              </div>
-            </>
-          )}
+          <span>Loading cached index…</span>
         </div>
       )}
+      {status === "crawling" && entry && <IndexProgress accountId={account.id} entry={entry} />}
 
       {/* Toolbar */}
       <div className="flex items-center gap-3 px-6 py-4">
@@ -271,10 +264,32 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
                     <td className="min-w-0 py-2.5 pr-3">
                       <div className="flex min-w-0 items-center gap-3">
                         {item.IsDir ? (
-                          <button className="flex min-w-0 items-center gap-3 text-left text-[var(--text)] hover:text-[var(--accent)]" onClick={() => setView({ kind: "browse", accountId: account.id, section: "all", path: item.Path })}>
-                            <ft.Icon size={18} style={{ color: ft.color }} className="shrink-0" />
-                            <span className="truncate">{item.Name}</span>
-                          </button>
+                          <>
+                            <button className="flex min-w-0 items-center gap-3 text-left text-[var(--text)] hover:text-[var(--accent)]" onClick={() => setView({ kind: "browse", accountId: account.id, section: "all", path: item.Path })}>
+                              <ft.Icon size={18} style={{ color: ft.color }} className="shrink-0" />
+                              <span className="truncate">{item.Name}</span>
+                            </button>
+                            {!folderIndexed(item.Path) ? (
+                              <button
+                                onClick={() => indexFolder(item.Path)}
+                                disabled={showCrawl}
+                                title="This folder isn't indexed yet — index it now"
+                                className="shrink-0 whitespace-nowrap text-xs text-[var(--text-3)] hover:text-[var(--accent)] disabled:opacity-50"
+                              >
+                                Not indexed — Index now
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => indexFolder(item.Path)}
+                                disabled={showCrawl}
+                                title="Re-index this folder"
+                                aria-label={`Index ${item.Name}`}
+                                className="shrink-0 text-[var(--text-3)] opacity-0 group-hover:opacity-100 hover:text-[var(--accent)] disabled:opacity-50"
+                              >
+                                <FolderSearch size={14} />
+                              </button>
+                            )}
+                          </>
                         ) : isVideo(item.Name) ? (
                           <button
                             className="flex min-w-0 items-center gap-3 text-left text-[var(--text)] hover:text-[var(--accent)]"

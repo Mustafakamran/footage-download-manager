@@ -65,6 +65,16 @@ export function indexRecrawl(accountId: string): Promise<void> {
   return invoke("index_recrawl", { accountId });
 }
 
+/** Manually (re)index just one subtree (BFS) and merge it into the account index. */
+export function indexFolder(accountId: string, folderPath: string): Promise<void> {
+  return invoke("index_folder", { accountId, folderPath });
+}
+
+/** Ask an in-progress crawl for this account to stop promptly. */
+export function indexCancel(accountId: string): Promise<void> {
+  return invoke("index_cancel", { accountId });
+}
+
 /** Fetch the built index ({tree, agg}) once ready. */
 export function indexGet(accountId: string): Promise<AccountIndex | null> {
   return invoke<AccountIndex | null>("index_get", { accountId });
