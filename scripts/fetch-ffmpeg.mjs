@@ -2,9 +2,9 @@
 // place them in src-tauri/binaries named `<tool>-<triple>(.exe)` so Tauri bundles
 // them as externalBin sidecars (same pattern as fetch-rclone.mjs).
 //
-// Source: ffmpeg.martin-riedl.de — static builds for macOS (arm64/amd64) and
-// Windows (amd64), uniform redirect URLs that resolve to a versioned zip
-// containing a single binary.
+// Sources differ per platform (each provides reliable STATIC builds):
+//   - macOS (arm64/amd64): ffmpeg.martin-riedl.de — one zip per tool.
+//   - Windows (amd64):      BtbN/FFmpeg-Builds — ONE zip with bin/ffmpeg.exe + ffprobe.exe.
 import { execSync, spawnSync } from "node:child_process";
 import { mkdirSync, createWriteStream, existsSync, rmSync, copyFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -20,22 +20,28 @@ const triple = execSync("rustc -vV")
   .trim();
 
 const map = {
-  "x86_64-pc-windows-msvc": { platform: "windows", arch: "amd64", ext: ".exe" },
-  "aarch64-apple-darwin": { platform: "macos", arch: "arm64", ext: "" },
-  "x86_64-apple-darwin": { platform: "macos", arch: "amd64", ext: "" },
+  "x86_64-pc-windows-msvc": { source: "btbn", ext: ".exe" },
+  "aarch64-apple-darwin": { source: "martin", platform: "macos", arch: "arm64", ext: "" },
+  "x86_64-apple-darwin": { source: "martin", platform: "macos", arch: "amd64", ext: "" },
 };
 const target = map[triple];
 if (!target) throw new Error(`Unsupported triple: ${triple}`);
 
+const TOOLS = ["ffmpeg", "ffprobe"];
 const outDir = join("src-tauri", "binaries");
 mkdirSync(outDir, { recursive: true });
+const finalPath = (tool) => join(outDir, `${tool}-${triple}${target.ext}`);
+
+if (TOOLS.every((t) => existsSync(finalPath(t)))) {
+  console.log("ffmpeg/ffprobe sidecars already present");
+  process.exit(0);
+}
 
 /** Recursively find the first file whose basename is `name` (or `name.exe`). */
 function findBinary(dir, name) {
   for (const entry of readdirSync(dir)) {
     const p = join(dir, entry);
-    const st = statSync(p);
-    if (st.isDirectory()) {
+    if (statSync(p).isDirectory()) {
       const found = findBinary(p, name);
       if (found) return found;
     } else if (entry === name || entry === `${name}.exe`) {
@@ -45,34 +51,57 @@ function findBinary(dir, name) {
   return null;
 }
 
-for (const tool of ["ffmpeg", "ffprobe"]) {
-  const finalPath = join(outDir, `${tool}-${triple}${target.ext}`);
-  if (existsSync(finalPath)) {
-    console.log(`${tool} sidecar already present: ${finalPath}`);
-    continue;
-  }
-
-  const url = `https://ffmpeg.martin-riedl.de/redirect/latest/${target.platform}/${target.arch}/release/${tool}.zip`;
-  const work = join(tmpdir(), `${tool}-dl-${process.pid}`);
-  mkdirSync(work, { recursive: true });
-  const zipPath = join(work, `${tool}.zip`);
-
+async function downloadZip(url, zipPath) {
   console.log(`Downloading ${url}`);
-  const res = await fetch(url); // fetch follows the 307 redirect to the versioned zip
-  if (!res.ok) throw new Error(`Download failed for ${tool}: ${res.status}`);
+  const res = await fetch(url); // follows redirects
+  if (!res.ok) throw new Error(`Download failed: ${res.status} (${url})`);
   await pipeline(Readable.fromWeb(res.body), createWriteStream(zipPath));
-
-  if (process.platform === "win32") {
-    spawnSync("powershell", ["-Command", `Expand-Archive -Path '${zipPath}' -DestinationPath '${work}' -Force`], { stdio: "inherit" });
-  } else {
-    spawnSync("unzip", ["-o", zipPath, "-d", work], { stdio: "inherit" });
-  }
-
-  const bin = findBinary(work, tool);
-  if (!bin) throw new Error(`${tool} binary not found in archive`);
-  // copy (not rename) — temp dir and repo can be on different drives on CI.
-  copyFileSync(bin, finalPath);
-  if (process.platform !== "win32") execSync(`chmod +x '${finalPath}'`);
-  rmSync(work, { recursive: true, force: true });
-  console.log(`Sidecar ready: ${finalPath}`);
 }
+
+function extractZip(zipPath, dir) {
+  if (process.platform === "win32") {
+    spawnSync("powershell", ["-Command", `Expand-Archive -Path '${zipPath}' -DestinationPath '${dir}' -Force`], { stdio: "inherit" });
+  } else {
+    spawnSync("unzip", ["-o", zipPath, "-d", dir], { stdio: "inherit" });
+  }
+}
+
+function place(srcBin, tool) {
+  // copy (not rename) — temp dir and repo can be on different drives on CI.
+  copyFileSync(srcBin, finalPath(tool));
+  if (process.platform !== "win32") execSync(`chmod +x '${finalPath(tool)}'`);
+  console.log(`Sidecar ready: ${finalPath(tool)}`);
+}
+
+const work = join(tmpdir(), `ffmpeg-dl-${process.pid}`);
+mkdirSync(work, { recursive: true });
+
+if (target.source === "btbn") {
+  // One combined GPL static zip containing bin/ffmpeg.exe + bin/ffprobe.exe.
+  const url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip";
+  const zipPath = join(work, "ffmpeg-win64.zip");
+  await downloadZip(url, zipPath);
+  extractZip(zipPath, work);
+  for (const tool of TOOLS) {
+    const bin = findBinary(work, tool);
+    if (!bin) throw new Error(`${tool} binary not found in archive`);
+    place(bin, tool);
+  }
+} else {
+  // martin-riedl: one zip per tool.
+  for (const tool of TOOLS) {
+    if (existsSync(finalPath(tool))) {
+      console.log(`${tool} sidecar already present`);
+      continue;
+    }
+    const url = `https://ffmpeg.martin-riedl.de/redirect/latest/${target.platform}/${target.arch}/release/${tool}.zip`;
+    const zipPath = join(work, `${tool}.zip`);
+    await downloadZip(url, zipPath);
+    extractZip(zipPath, work);
+    const bin = findBinary(work, tool);
+    if (!bin) throw new Error(`${tool} binary not found in archive`);
+    place(bin, tool);
+  }
+}
+
+rmSync(work, { recursive: true, force: true });
