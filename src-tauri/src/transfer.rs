@@ -489,6 +489,51 @@ fn header_lookup<'a>(headers: &'a HashMap<String, String>, name: &str) -> Option
         .map(|(_, v)| v.as_str())
 }
 
+/// Follow redirects manually, RE-ATTACHING the user-provided UA/Referer/Cookie on
+/// every hop (and pointing Referer at the previous URL, like a browser). reqwest's
+/// auto-redirect drops Cookie/Authorization across hosts, which breaks Drive /
+/// mediafire-style downloads that redirect to a signed CDN on another host. Returns
+/// the final (non-redirect) response.
+fn http_follow(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    ua: &str,
+    referer: Option<&str>,
+    cookie: Option<&str>,
+    range: Option<&str>,
+) -> Result<reqwest::blocking::Response, String> {
+    let mut cur = url.to_string();
+    let mut referer = referer.map(|s| s.to_string());
+    for _ in 0..10 {
+        let mut req = client.get(&cur).header("User-Agent", ua);
+        if let Some(r) = &referer {
+            req = req.header("Referer", r);
+        }
+        if let Some(c) = cookie {
+            req = req.header("Cookie", c);
+        }
+        if let Some(rg) = range {
+            req = req.header("Range", rg);
+        }
+        let resp = req.send().map_err(|e| e.to_string())?;
+        if resp.status().is_redirection() {
+            let loc = resp
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .ok_or("redirect without a Location header")?;
+            let next = reqwest::Url::parse(&cur)
+                .and_then(|base| base.join(loc))
+                .map_err(|e| e.to_string())?;
+            referer = Some(cur.clone()); // browser sets Referer to the previous URL
+            cur = next.to_string();
+            continue;
+        }
+        return Ok(resp);
+    }
+    Err("too many redirects".into())
+}
+
 /// Stream a generic web (HTTP/HTTPS) URL to `dest`. Unlike the block engine, the
 /// size is usually unknown and the server may not support Range, so we sequentially
 /// stream the body into a `.fdmpart`, resuming via Range when possible and
@@ -499,30 +544,25 @@ fn download_http(url: &str, dest: &Path, headers: &HashMap<String, String>, h: &
     }
     let part = part_path(dest);
     // No total-request timeout (a big file streams in one response); connect only.
+    // Auto-redirect is OFF — we follow manually (http_follow) so Cookie/Referer
+    // survive cross-host redirects (the common Drive/mediafire → CDN case).
     let client = reqwest::blocking::Client::builder()
         .connect_timeout(Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| e.to_string())?;
 
     // A User-Agent from the item headers overrides the default browser-ish UA
-    // (some hosts gate on the originating browser's exact UA); otherwise keep
-    // HTTP_UA. Referer/Cookie are forwarded when present so referer/cookie-gated
-    // direct downloads (mediafire/filecr/"save image as") succeed.
+    // (some hosts gate on the exact browser UA); otherwise keep HTTP_UA.
+    // Referer/Cookie are forwarded so referer/cookie-gated downloads succeed.
     let ua = header_lookup(headers, "user-agent").unwrap_or(HTTP_UA);
+    let referer = header_lookup(headers, "referer");
+    let cookie = header_lookup(headers, "cookie");
 
     // Resume from any partial via Range.
     let mut offset = len_of(&part);
-    let mut req = client.get(url).header("User-Agent", ua);
-    if let Some(referer) = header_lookup(headers, "referer") {
-        req = req.header("Referer", referer);
-    }
-    if let Some(cookie) = header_lookup(headers, "cookie") {
-        req = req.header("Cookie", cookie);
-    }
-    if offset > 0 {
-        req = req.header("Range", format!("bytes={offset}-"));
-    }
-    let mut resp = req.send().map_err(|e| e.to_string())?;
+    let range = if offset > 0 { Some(format!("bytes={offset}-")) } else { None };
+    let mut resp = http_follow(&client, url, ua, referer, cookie, range.as_deref())?;
     let status = resp.status();
     // Server ignored our Range (sent 200 not 206) → start over.
     if offset > 0 && status.as_u16() == 200 {
@@ -533,12 +573,9 @@ fn download_http(url: &str, dest: &Path, headers: &HashMap<String, String>, h: &
         let b = resp.text().unwrap_or_default();
         return Err(format!("download {status}: {}", b.chars().take(200).collect::<String>()));
     }
-    // Reject obvious HTML pages (download portals / share pages aren't direct files).
-    if let Some(ct) = resp.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()) {
-        if ct.trim_start().starts_with("text/html") {
-            return Err("the link returned a web page, not a file — use a direct file URL".into());
-        }
-    }
+    // No content-type guard: download whatever the server returns (like wget/curl).
+    // The extension's interception hands us the real file URL; a guard here just
+    // blocked legit downloads that momentarily looked like HTML.
 
     let mut file = std::fs::OpenOptions::new()
         .create(true)
