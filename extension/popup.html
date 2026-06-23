@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FDM Downloader</title>
+    <style>
+      :root {
+        --bg: #0f172a;
+        --panel: #1e293b;
+        --panel-2: #273449;
+        --text: #e2e8f0;
+        --muted: #94a3b8;
+        --accent: #3b82f6;
+        --accent-2: #2563eb;
+        --ok: #22c55e;
+        --fail: #ef4444;
+        --border: #334155;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        padding: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        width: 320px;
+      }
+      .wrap { padding: 14px 14px 16px; }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        margin-bottom: 12px;
+      }
+      header .logo {
+        width: 28px; height: 28px;
+        border-radius: 7px;
+        background: linear-gradient(180deg, var(--accent), var(--accent-2));
+        display: grid; place-items: center;
+        font-size: 15px;
+        box-shadow: 0 2px 6px rgba(0,0,0,.35);
+      }
+      header h1 { font-size: 14px; margin: 0; font-weight: 700; }
+      header .sub { font-size: 11px; color: var(--muted); margin-top: 1px; }
+
+      label {
+        display: block;
+        font-size: 11px;
+        color: var(--muted);
+        margin: 12px 0 4px;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+      }
+      input[type="text"], input[type="password"], input[type="number"] {
+        width: 100%;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        color: var(--text);
+        padding: 8px 9px;
+        font: inherit;
+        outline: none;
+      }
+      input:focus { border-color: var(--accent); }
+      .row { display: flex; gap: 8px; }
+      .row > .grow { flex: 1; }
+      .row > .port { width: 92px; }
+
+      button {
+        font: inherit;
+        font-weight: 600;
+        color: #fff;
+        background: linear-gradient(180deg, var(--accent), var(--accent-2));
+        border: 1px solid rgba(0,0,0,.2);
+        border-radius: 7px;
+        padding: 9px 12px;
+        cursor: pointer;
+        transition: filter .12s ease, transform .05s ease;
+      }
+      button:hover { filter: brightness(1.07); }
+      button:active { transform: translateY(1px); }
+      button.secondary {
+        background: var(--panel-2);
+        color: var(--text);
+        border-color: var(--border);
+      }
+      .actions { display: flex; gap: 8px; margin-top: 14px; }
+      .actions button { flex: 1; }
+
+      .status {
+        margin-top: 12px;
+        font-size: 12px;
+        padding: 9px 10px;
+        border-radius: 7px;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 36px;
+      }
+      .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+      .status.ok   { border-color: rgba(34,197,94,.5); }
+      .status.ok   .dot { background: var(--ok); }
+      .status.fail { border-color: rgba(239,68,68,.5); }
+      .status.fail .dot { background: var(--fail); }
+      .status .msg { line-height: 1.35; }
+
+      .hint {
+        margin-top: 12px;
+        font-size: 11px;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+      .hint code {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 1px 5px;
+        font-size: 11px;
+      }
+      .iconbtn {
+        background: var(--panel-2);
+        border: 1px solid var(--border);
+        color: var(--text);
+        border-radius: 7px;
+        padding: 0 10px;
+        cursor: pointer;
+        font-weight: 600;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <div class="logo">⬇</div>
+        <div>
+          <h1>FDM Downloader</h1>
+          <div class="sub">Send links straight to the FDM app</div>
+        </div>
+      </header>
+
+      <label for="token">Pairing token</label>
+      <div class="row">
+        <input
+          id="token"
+          class="grow"
+          type="password"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="Paste from FDM Settings → Browser extension"
+        />
+        <button id="reveal" class="iconbtn" type="button" title="Show / hide">👁</button>
+      </div>
+
+      <label for="port">Port</label>
+      <div class="row">
+        <input id="port" class="port" type="number" min="1" max="65535" value="53713" />
+        <button id="save" class="grow" type="button">Save</button>
+      </div>
+
+      <div class="actions">
+        <button id="test" type="button">Test connection</button>
+      </div>
+
+      <div id="status" class="status">
+        <span class="dot"></span>
+        <span class="msg">Not tested yet.</span>
+      </div>
+
+      <div class="hint">
+        In FDM, open <code>Settings → Browser extension</code>, copy the token,
+        paste it above and click <strong>Save</strong>. Then
+        <strong>Test connection</strong> to confirm FDM is running.
+      </div>
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
