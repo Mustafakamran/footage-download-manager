@@ -12,6 +12,11 @@ that sends download links straight to the **FDM** desktop app.
 - **Direct files** (`.zip`, `.mp4`, `.pdf`, `.dmg`, …): hover any download link and
   click the small **⬇ FDM** button, or right-click → **Download with FDM** /
   **Save image with FDM**.
+- **Images** (Google Images, Google Drive web, any site): hover a large image and
+  click the **⬇ FDM** button to send the image straight to FDM.
+- **Any site / Google Drive web**: when "Intercept browser downloads" is on and FDM
+  is running, real browser-initiated downloads (including Drive file exports) are
+  handed to FDM with the page's cookies + referrer so gated downloads still work.
 - **Social / video pages**: on **YouTube** a **Download with FDM** control is
   injected into the player controls (next to settings / fullscreen). On other
   media/social sites or any page with a real `<video>`, a **⬇ FDM** button is
@@ -82,7 +87,7 @@ so the extension's background service worker can call the loopback server.
 | ---------------- | -------------------------------------------------------------------------- |
 | `manifest.json`  | MV3 manifest (permissions, content script, background worker, popup).      |
 | `background.js`  | Service worker: holds token+port, POSTs to FDM, context menus, badges.     |
-| `content.js`     | On-page UI: hover ⬇ buttons on direct links + floating media pill (SPA-aware, shadow-DOM isolated). |
+| `content.js`     | On-page UI: hover ⬇ buttons on direct links + large images, in-player/video buttons + toast (SPA-aware, shadow-DOM isolated, FDM dark theme). |
 | `popup.html` / `popup.js` | Pairing UI: token field, port, Save, Test connection.             |
 | `icons/`         | Toolbar / store icons (16/32/48/128) + `icon.svg` source.                  |
 

@@ -89,60 +89,96 @@
   const shadow = host.attachShadow({ mode: "open" });
 
   const style = document.createElement("style");
+  // FDM dark theme tokens (hardcoded — the extension can't read app CSS vars).
+  // bg #000, surface #0e0e10, card #161618, hover #1f1f22, border #262629,
+  // border-strong #38383c, text #f4f4f6, accent #fff / accent-ink #000,
+  // ok #3fb950, fail #f85149.
   style.textContent = `
     :host { all: initial; }
     * { box-sizing: border-box; }
 
+    /* Shared hover button used for direct links AND large images.
+       Dark FDM card surface, subtle border, ~8px radius, light text. */
     .fdm-btn {
       position: absolute;
       display: inline-flex;
       align-items: center;
-      gap: 4px;
+      gap: 5px;
       font: 600 11px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      color: #fff;
-      background: linear-gradient(180deg, #3b82f6, #2563eb);
-      border: 1px solid rgba(0,0,0,.15);
-      border-radius: 6px;
-      padding: 4px 7px;
+      color: #f4f4f6;
+      background: #161618;
+      border: 1px solid #38383c;
+      border-radius: 8px;
+      padding: 5px 8px;
       cursor: pointer;
-      box-shadow: 0 2px 6px rgba(0,0,0,.25);
+      box-shadow: 0 4px 14px rgba(0,0,0,.5);
       white-space: nowrap;
       user-select: none;
       pointer-events: auto;
       opacity: 0;
       transform: translateY(-2px);
-      transition: opacity .12s ease, transform .12s ease, background .12s ease;
+      transition: opacity .12s ease, transform .12s ease, background .12s ease, border-color .12s ease;
     }
     .fdm-btn.fdm-show { opacity: 1; transform: translateY(0); }
-    .fdm-btn:hover { background: linear-gradient(180deg, #2563eb, #1d4ed8); }
+    .fdm-btn:hover { background: #1f1f22; border-color: #38383c; }
     .fdm-btn:active { transform: translateY(1px); }
-    .fdm-btn.fdm-ok   { background: linear-gradient(180deg, #22c55e, #16a34a); }
-    .fdm-btn.fdm-fail { background: linear-gradient(180deg, #ef4444, #dc2626); }
+    .fdm-btn.fdm-ok   { color: #3fb950; border-color: #3fb950; background: #161618; }
+    .fdm-btn.fdm-fail { color: #f85149; border-color: #f85149; background: #161618; }
 
-    /* A compact button anchored to the TOP-RIGHT CORNER of a specific <video>. */
+    /* A compact button anchored to the TOP-RIGHT CORNER of a specific <video>.
+       Higher-contrast: light accent fill with dark ink, FDM style. */
     .fdm-vbtn {
       position: absolute;
       display: inline-flex;
       align-items: center;
       gap: 6px;
       font: 600 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      color: #fff;
-      background: linear-gradient(180deg, rgba(59,130,246,.96), rgba(37,99,235,.96));
-      border: 1px solid rgba(0,0,0,.25);
+      color: #000000;
+      background: #ffffff;
+      border: 1px solid #38383c;
       border-radius: 8px;
       padding: 7px 11px;
       cursor: pointer;
-      box-shadow: 0 4px 14px rgba(0,0,0,.4);
+      box-shadow: 0 4px 14px rgba(0,0,0,.5);
       pointer-events: auto;
       user-select: none;
       white-space: nowrap;
-      transition: background .15s ease, transform .12s ease, opacity .15s ease;
+      transition: background .15s ease, transform .12s ease, opacity .15s ease, color .15s ease;
     }
-    .fdm-vbtn:hover { transform: translateY(-1px); background: linear-gradient(180deg, #2563eb, #1d4ed8); }
+    .fdm-vbtn:hover { transform: translateY(-1px); opacity: .88; }
     .fdm-vbtn:active { transform: translateY(0); }
-    .fdm-vbtn.fdm-ok   { background: linear-gradient(180deg, #22c55e, #16a34a); }
-    .fdm-vbtn.fdm-fail { background: linear-gradient(180deg, #ef4444, #dc2626); }
+    .fdm-vbtn.fdm-ok   { background: #3fb950; color: #000000; opacity: 1; }
+    .fdm-vbtn.fdm-fail { background: #f85149; color: #000000; opacity: 1; }
     .fdm-ico { font-size: 13px; line-height: 1; }
+
+    /* Transient toast, bottom-right, FDM card surface. */
+    .fdm-toast {
+      position: fixed;
+      right: 16px;
+      bottom: 16px;
+      max-width: 280px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font: 600 12px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      color: #f4f4f6;
+      background: #161618;
+      border: 1px solid #262629;
+      border-radius: 8px;
+      padding: 10px 12px;
+      box-shadow: 0 8px 24px rgba(0,0,0,.6);
+      pointer-events: none;
+      opacity: 0;
+      transform: translateY(6px);
+      transition: opacity .15s ease, transform .15s ease;
+    }
+    .fdm-toast.fdm-show { opacity: 1; transform: translateY(0); }
+    .fdm-toast .fdm-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #a0a0a6; flex: none;
+    }
+    .fdm-toast.fdm-ok   .fdm-dot { background: #3fb950; }
+    .fdm-toast.fdm-fail .fdm-dot { background: #f85149; }
   `;
   shadow.appendChild(style);
 
@@ -157,18 +193,48 @@
   }
 
   // --------------------------------------------------------------------------
-  // (a) Direct-link hover buttons
+  // Toast (transient FDM-styled feedback, bottom-right of the viewport)
   // --------------------------------------------------------------------------
 
-  // We use ONE shared button element that follows the hovered anchor. This is
-  // far lighter than injecting a button per-link on large pages.
+  const toast = document.createElement("div");
+  toast.className = "fdm-toast";
+  toast.innerHTML = `<span class="fdm-dot"></span><span class="fdm-tmsg"></span>`;
+  layer.appendChild(toast);
+  const toastMsg = toast.querySelector(".fdm-tmsg");
+  let toastTimer = null;
+
+  function showToast(text, state) {
+    mountHost();
+    toast.classList.remove("fdm-ok", "fdm-fail");
+    if (state === "ok") toast.classList.add("fdm-ok");
+    else if (state === "fail") toast.classList.add("fdm-fail");
+    toastMsg.textContent = text;
+    toast.classList.add("fdm-show");
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      toast.classList.remove("fdm-show");
+    }, 2600);
+  }
+
+  // --------------------------------------------------------------------------
+  // (a) Hover "⬇ FDM" buttons — for direct-download links AND large images
+  //
+  // ONE shared button element follows the hovered target. This is far lighter
+  // than injecting a button per-element on large pages (Google Images, Drive
+  // grids, etc.). The hovered target can be:
+  //   - an <a href> whose URL ends in a known downloadable extension, OR
+  //   - a large <img> (we grab its current src as kind:"file").
+  // --------------------------------------------------------------------------
+
   const linkBtn = document.createElement("button");
   linkBtn.className = "fdm-btn";
   linkBtn.type = "button";
   linkBtn.innerHTML = `<span class="fdm-ico">⬇</span><span>FDM</span>`;
   layer.appendChild(linkBtn);
 
-  let currentAnchor = null;
+  // The element the shared button is currently attached to, plus the resolved
+  // URL + kind to send when clicked. el is the DOM node we track for position.
+  let currentTarget = null; // { el, url, kind }
   let hideTimer = null;
 
   function isDownloadableHref(href) {
@@ -188,13 +254,41 @@
     return DOWNLOADABLE_EXTS.has(ext);
   }
 
-  function positionButton(anchor) {
-    const r = anchor.getBoundingClientRect();
+  // Minimum rendered size for an <img> to get a grab button. Skips icons,
+  // sprites, tracking pixels, avatars, etc.
+  const MIN_IMG_W = 120;
+  const MIN_IMG_H = 120;
+
+  // Resolve the best downloadable URL for an <img>. Prefers currentSrc (the
+  // actually-rendered source from srcset), falls back to src. Rejects
+  // data:/blob: which FDM can't fetch over the network.
+  function imageUrl(img) {
+    const raw = img.currentSrc || img.src || "";
+    if (!raw) return null;
+    let u;
+    try {
+      u = new URL(raw, location.href);
+    } catch (_) {
+      return null;
+    }
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    return u.href;
+  }
+
+  function isGrabbableImage(img) {
+    if (!img || img.tagName !== "IMG") return false;
+    if (!imageUrl(img)) return false;
+    const r = img.getBoundingClientRect();
+    return r.width >= MIN_IMG_W && r.height >= MIN_IMG_H;
+  }
+
+  function positionButton(el) {
+    const r = el.getBoundingClientRect();
     if (r.width === 0 && r.height === 0) return false;
-    // Place at the top-right corner of the anchor, nudged slightly outward.
-    const btnW = 56; // approx; exact width not critical
-    let left = r.right - btnW;
-    let top = r.top - 4;
+    // Place at the top-right corner of the element, nudged slightly inward.
+    const btnW = linkBtn.offsetWidth || 56;
+    let left = r.right - btnW - 4;
+    let top = r.top + 4;
     // Keep it on-screen. Coordinates are viewport-relative: the layer lives
     // inside a position:fixed host, so absolute offsets match
     // getBoundingClientRect() directly (no scroll offset needed).
@@ -205,16 +299,16 @@
     return true;
   }
 
-  function showButtonFor(anchor) {
+  function showButtonFor(target) {
     if (hideTimer) {
       clearTimeout(hideTimer);
       hideTimer = null;
     }
-    currentAnchor = anchor;
+    currentTarget = target;
     mountHost();
     linkBtn.classList.remove("fdm-ok", "fdm-fail");
     linkBtn.innerHTML = `<span class="fdm-ico">⬇</span><span>FDM</span>`;
-    if (positionButton(anchor)) {
+    if (positionButton(target.el)) {
       linkBtn.classList.add("fdm-show");
     }
   }
@@ -223,18 +317,32 @@
     if (hideTimer) clearTimeout(hideTimer);
     hideTimer = setTimeout(() => {
       linkBtn.classList.remove("fdm-show");
-      currentAnchor = null;
+      currentTarget = null;
     }, 220);
+  }
+
+  // Resolve the hovered DOM node to a grab target (anchor link or image), or
+  // null if neither applies. Anchors win over images they may wrap.
+  function targetFromNode(node) {
+    if (!node || !node.closest) return null;
+    const anchor = node.closest("a[href]");
+    if (anchor && isDownloadableHref(anchor.href)) {
+      return { el: anchor, url: anchor.href, kind: "file" };
+    }
+    const img = node.tagName === "IMG" ? node : node.closest("img");
+    if (img && isGrabbableImage(img)) {
+      const url = imageUrl(img);
+      if (url) return { el: img, url, kind: "file" };
+    }
+    return null;
   }
 
   // Delegate hover detection on the document.
   document.addEventListener(
     "mouseover",
     (e) => {
-      const anchor = e.target && e.target.closest && e.target.closest("a[href]");
-      if (anchor && isDownloadableHref(anchor.href)) {
-        showButtonFor(anchor);
-      }
+      const target = targetFromNode(e.target);
+      if (target) showButtonFor(target);
     },
     true
   );
@@ -242,11 +350,14 @@
   document.addEventListener(
     "mouseout",
     (e) => {
-      // Only hide if we're leaving the anchor and not entering the button.
+      // Only hide if we're leaving the tracked element and not entering the button.
       const to = e.relatedTarget;
       if (to && (to === linkBtn || (to.closest && to.closest("#fdm-downloader-host")))) return;
-      const anchor = e.target && e.target.closest && e.target.closest("a[href]");
-      if (anchor && anchor === currentAnchor) scheduleHide();
+      if (!currentTarget) return;
+      const from = e.target;
+      if (from && currentTarget.el && (from === currentTarget.el || (from.contains && from.contains(currentTarget.el)) || (currentTarget.el.contains && currentTarget.el.contains(from)))) {
+        scheduleHide();
+      }
     },
     true
   );
@@ -262,33 +373,35 @@
   linkBtn.addEventListener("click", (e) => {
     e.preventDefault();
     e.stopPropagation();
-    if (!currentAnchor) return;
-    const url = currentAnchor.href;
+    if (!currentTarget) return;
+    const { url, kind } = currentTarget;
     linkBtn.innerHTML = `<span class="fdm-ico">…</span><span>FDM</span>`;
-    send(url, "file", (res) => {
+    send(url, kind || "file", (res) => {
       if (res && res.ok) {
         linkBtn.classList.add("fdm-ok");
         linkBtn.innerHTML = `<span class="fdm-ico">✓</span><span>Sent</span>`;
+        showToast("Sent to FDM", "ok");
       } else {
         linkBtn.classList.add("fdm-fail");
         linkBtn.innerHTML = `<span class="fdm-ico">✕</span><span>Failed</span>`;
+        showToast("Couldn't reach FDM", "fail");
       }
       setTimeout(() => {
         linkBtn.classList.remove("fdm-ok", "fdm-fail");
         linkBtn.classList.remove("fdm-show");
-        currentAnchor = null;
+        currentTarget = null;
       }, 1400);
     });
   });
 
-  // Keep the button glued to its anchor while scrolling.
+  // Keep the button glued to its target while scrolling.
   window.addEventListener(
     "scroll",
     () => {
-      if (currentAnchor && linkBtn.classList.contains("fdm-show")) {
-        if (!positionButton(currentAnchor)) {
+      if (currentTarget && linkBtn.classList.contains("fdm-show")) {
+        if (!positionButton(currentTarget.el)) {
           linkBtn.classList.remove("fdm-show");
-          currentAnchor = null;
+          currentTarget = null;
         }
       }
     },
@@ -324,9 +437,11 @@
       if (res && res.ok) {
         btn.classList.add("fdm-ok");
         if (setLabel) setLabel("Sent ✓");
+        showToast("Sent to FDM", "ok");
       } else {
         btn.classList.add("fdm-fail");
         if (setLabel) setLabel("Failed");
+        showToast("Couldn't reach FDM", "fail");
       }
       setTimeout(() => {
         btn.classList.remove("fdm-ok", "fdm-fail");
