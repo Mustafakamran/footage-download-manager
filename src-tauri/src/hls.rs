@@ -319,21 +319,34 @@ pub fn ffprobe_args(input: &str) -> Vec<String> {
         "-print_format".into(),
         "json".into(),
         "-show_entries".into(),
-        "format=duration:stream=height,codec_type".into(),
+        "format=duration:stream=height,codec_type,codec_name".into(),
         "-i".into(),
         input.to_string(),
     ]
 }
 
-/// Source probe result: total duration (s) + max video stream height (px).
-#[derive(Clone, Copy, PartialEq, Debug)]
+/// Source probe result: total duration (s), max video stream height (px), and the
+/// video/audio codec names (for the direct-play decision).
+#[derive(Clone, PartialEq, Debug)]
 pub struct Probe {
     pub duration: f64,
     pub height: u32,
+    pub vcodec: String,
+    pub acodec: String,
+}
+
+impl Probe {
+    /// True when the webview `<video>` can play the source DIRECTLY with no
+    /// transcode — H.264 video + (AAC or no) audio. These files skip the JIT
+    /// transcoder entirely (instant open, zero CPU), which is the common mp4 case
+    /// and removes the "lag when loading a video" caused by warming up ffmpeg.
+    pub fn directly_playable(&self) -> bool {
+        self.vcodec == "h264" && (self.acodec.is_empty() || self.acodec == "aac")
+    }
 }
 
 /// Parse ffprobe JSON (as produced by `ffprobe_args`) into a `Probe`. Picks the
-/// tallest video stream's height and the format duration.
+/// tallest video stream's height, the format duration, and the v/a codec names.
 pub fn parse_probe(json: &str) -> Result<Probe, String> {
     let v: serde_json::Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
     let duration = v
@@ -343,9 +356,8 @@ pub fn parse_probe(json: &str) -> Result<Probe, String> {
         .and_then(|s| s.parse::<f64>().ok())
         .filter(|d| *d > 0.0)
         .ok_or_else(|| "ffprobe: missing/zero duration".to_string())?;
-    let height = v
-        .get("streams")
-        .and_then(|s| s.as_array())
+    let streams = v.get("streams").and_then(|s| s.as_array());
+    let height = streams
         .map(|arr| {
             arr.iter()
                 .filter(|st| st.get("codec_type").and_then(|c| c.as_str()) == Some("video"))
@@ -357,7 +369,17 @@ pub fn parse_probe(json: &str) -> Result<Probe, String> {
     if height == 0 {
         return Err("ffprobe: no video stream height".into());
     }
-    Ok(Probe { duration, height })
+    let codec_of = |kind: &str| -> String {
+        streams
+            .and_then(|arr| {
+                arr.iter()
+                    .find(|st| st.get("codec_type").and_then(|c| c.as_str()) == Some(kind))
+                    .and_then(|st| st.get("codec_name").and_then(|c| c.as_str()))
+            })
+            .unwrap_or("")
+            .to_string()
+    };
+    Ok(Probe { duration, height, vcodec: codec_of("video"), acodec: codec_of("audio") })
 }
 
 // ---------------------------------------------------------------------------
@@ -810,12 +832,12 @@ fn list_encoders(ffmpeg: &std::path::Path) -> Vec<String> {
 /// Probe a source once (single-flight by source key), caching duration + height.
 fn probe_source(state: &HlsRuntime, src: &HlsSource) -> Result<Probe, String> {
     if let Some(p) = state.probes.lock().unwrap_or_else(|e| e.into_inner()).get(&src.key) {
-        return Ok(*p);
+        return Ok(p.clone());
     }
     // Serialize probes so a source is only probed once even under concurrency.
     let _guard = state.probe_lock.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(p) = state.probes.lock().unwrap_or_else(|e| e.into_inner()).get(&src.key) {
-        return Ok(*p);
+        return Ok(p.clone());
     }
     let ffprobe = state.ffprobe()?;
     let args = ffprobe_args(src.input.as_ffmpeg_input());
@@ -831,8 +853,44 @@ fn probe_source(state: &HlsRuntime, src: &HlsSource) -> Result<Probe, String> {
         .probes
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .insert(src.key.clone(), probe);
+        .insert(src.key.clone(), probe.clone());
     Ok(probe)
+}
+
+/// Tiny `k=v&k=v` parser (the stream server has its own; this keeps hls.rs
+/// self-contained for the `stream_mode` command).
+fn parse_query_params(q: &str) -> HashMap<String, String> {
+    let mut m = HashMap::new();
+    for pair in q.split('&') {
+        if let Some((k, v)) = pair.split_once('=') {
+            m.insert(k.to_string(), v.to_string());
+        }
+    }
+    m
+}
+
+/// Decide whether the review player should stream a source DIRECTLY (no transcode)
+/// or via the JIT-HLS transcoder. `query` is the same `acct=&fid=&path=&size=&ext=`
+/// (or `local=`) string the player builds for its URLs. Returns "direct" for
+/// already-playable H.264/AAC files (instant, no ffmpeg) or "hls" otherwise. On any
+/// probe failure it returns "hls" (no regression — the transcoder/its fallback handle it).
+#[tauri::command]
+pub fn stream_mode(app: tauri::AppHandle, query: String) -> Result<String, String> {
+    use tauri::Manager;
+    let media_base = app
+        .state::<crate::stream::StreamState>()
+        .base
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .ok_or_else(|| "stream server not started".to_string())?;
+    let params = parse_query_params(&query);
+    let src = parse_source(&query, &params, &media_base)?;
+    let st = app.state::<HlsState>();
+    Ok(match probe_source(&st.rt, &src) {
+        Ok(p) if p.directly_playable() => "direct".into(),
+        _ => "hls".into(),
+    })
 }
 
 /// Resolve a rendition by height for a given source (so an out-of-range height in
@@ -992,6 +1050,7 @@ fn prefetch_window_segments(
         }
         let state = Arc::clone(&state);
         let src = src.clone();
+        let probe = probe.clone();
         std::thread::spawn(move || {
             let _ = produce_segment(&state, &src, &rend, next, &probe, true);
             state.prefetching.lock().unwrap_or_else(|e| e.into_inner()).remove(&key);

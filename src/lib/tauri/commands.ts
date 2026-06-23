@@ -142,6 +142,16 @@ export function streamBase(): Promise<string> {
 }
 
 /**
+ * Decide how the review player should source a clip given its `sourceParams`
+ * query string: "direct" (already-playable H.264/AAC → no transcode, instant) or
+ * "hls" (needs the JIT transcoder). Probes the codec server-side; falls back to
+ * "hls" on any error.
+ */
+export function streamMode(query: string): Promise<"direct" | "hls"> {
+  return invoke<"direct" | "hls">("stream_mode", { query });
+}
+
+/**
  * The persistent pairing token for the browser extension's loopback ingest.
  * Generated on first call (stored in app config / keychain) and stable after.
  * The extension sends it as the `X-FDM-Token` header on `POST /fdm/ingest`.

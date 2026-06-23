@@ -64,6 +64,7 @@ pub fn run() {
             rc_call,
             write_binary_file,
             stream::stream_base,
+            hls::stream_mode,
             ingest::ingest_token,
             ingest::prepare_extension,
             ingest::reveal_path,
