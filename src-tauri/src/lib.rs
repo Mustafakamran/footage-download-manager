@@ -65,6 +65,8 @@ pub fn run() {
             write_binary_file,
             stream::stream_base,
             ingest::ingest_token,
+            ingest::prepare_extension,
+            ingest::reveal_path,
             bdm::bdm_get_config,
             bdm::bdm_set_config,
             accounts::list_accounts,

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { FolderOpen, Check, RefreshCw, Download, Loader2, Layers, Copy, Puzzle } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getVersion } from "@tauri-apps/api/app";
-import { getSecret, setSecret, SECRET_KEYS, bdmGetConfig, bdmSetConfig, ingestToken } from "../lib/tauri/commands";
+import { getSecret, setSecret, SECRET_KEYS, bdmGetConfig, bdmSetConfig, ingestToken, prepareExtension, revealPath } from "../lib/tauri/commands";
 import { Button, TextField, Card } from "./ui";
 import { useToasts } from "../store/toast";
 import { useTransfers } from "../store/transfers";
@@ -42,6 +42,8 @@ export function SettingsView() {
   const [token, setToken] = useState<string | null>(null);
   const [tokenErr, setTokenErr] = useState(false);
   const [askWhere, setAskWhere] = useState<boolean>(() => getAskWhereToSave());
+  const [extFolder, setExtFolder] = useState<string | null>(null);
+  const [extBusy, setExtBusy] = useState(false);
 
   // Load the pairing token lazily when the Browser-extension tab is first opened
   // (it generates one on first read — no need to do it on every Settings mount).
@@ -62,6 +64,20 @@ export function SettingsView() {
       .writeText(token)
       .then(() => markSaved("token", "Token copied"))
       .catch(() => toast("Couldn't copy token", "error"));
+  }
+
+  async function installExtension() {
+    setExtBusy(true);
+    try {
+      const folder = await prepareExtension();
+      setExtFolder(folder);
+      await revealPath(folder).catch(() => {});
+      markSaved("ext", "Extension folder ready — opened in your file manager");
+    } catch (e) {
+      toast(`Couldn't prepare the extension: ${e}`, "error");
+    } finally {
+      setExtBusy(false);
+    }
   }
 
   function toggleAskWhere(on: boolean) {
@@ -253,17 +269,48 @@ export function SettingsView() {
           </Card>
 
           <Card className="p-5">
-            <h2 className="mb-1 text-sm font-semibold text-[var(--text)]">Install the extension</h2>
-            <ol className="ml-4 list-decimal space-y-1.5 text-xs text-[var(--text-2)]">
+            <h2 className="mb-1 text-sm font-semibold text-[var(--text)]">Install / set up extension</h2>
+            <p className="mb-4 text-xs text-[var(--text-3)]">
+              Chrome can't install an unpacked extension automatically, so this is a quick guided setup. The button
+              below copies the bundled extension to a folder you can reach and opens it for you. A one-click Chrome
+              Web Store install is planned for a future release.
+            </p>
+            <div className="flex items-center gap-3">
+              <Button variant="primary" onClick={() => void installExtension()} disabled={extBusy}>
+                {extBusy ? <Loader2 size={16} className="animate-spin" /> : <Puzzle size={16} />}
+                Install / set up extension
+              </Button>
+              {tick("ext")}
+            </div>
+            {extFolder && (
+              <div className="mt-3 flex items-center gap-3">
+                <div className="tnum min-w-0 flex-1 truncate rounded-[6px] border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-2)]">
+                  {extFolder}
+                </div>
+                <Button variant="ghost" onClick={() => void revealPath(extFolder).catch(() => {})}>
+                  <FolderOpen size={16} /> Reveal
+                </Button>
+              </div>
+            )}
+            <ol className="mt-4 ml-4 list-decimal space-y-1.5 text-xs text-[var(--text-2)]">
               <li>
-                Open your browser's extensions page and enable{" "}
-                <span className="text-[var(--text)]">Developer mode</span>.
+                Click <span className="text-[var(--text)]">Install / set up extension</span> above — it opens the
+                extension folder in your file manager.
               </li>
               <li>
-                Click <span className="text-[var(--text)]">Load unpacked</span> and select the{" "}
-                <span className="tnum text-[var(--text)]">extension/</span> folder from the FDM install.
+                In Chrome, open <span className="tnum text-[var(--text)]">chrome://extensions</span>.
               </li>
-              <li>Open the extension's options and paste the pairing token above.</li>
+              <li>
+                Enable <span className="text-[var(--text)]">Developer mode</span> (top-right toggle).
+              </li>
+              <li>
+                Click <span className="text-[var(--text)]">Load unpacked</span> and choose the folder that was just
+                revealed{extFolder ? "" : " (shown above after you click the button)"}.
+              </li>
+              <li>
+                Open the extension's options, paste the pairing token shown above, and{" "}
+                <span className="text-[var(--text)]">Save</span>.
+              </li>
               <li>
                 A green dot in the extension means it reached FDM on{" "}
                 <span className="tnum text-[var(--text-2)]">127.0.0.1:{INGEST_PORT}</span>. Now any captured file or

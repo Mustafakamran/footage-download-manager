@@ -17,7 +17,8 @@ use crate::rclone::config::random_secret;
 use crate::secrets;
 use serde::Deserialize;
 use serde_json::json;
-use tauri::{AppHandle, Emitter};
+use std::path::{Path, PathBuf};
+use tauri::{AppHandle, Emitter, Manager};
 use tiny_http::{Header, Method, Response, Server};
 
 /// Fixed loopback port the extension targets. Best-effort: if it is already taken
@@ -51,6 +52,93 @@ pub fn token() -> Result<String, String> {
 #[tauri::command]
 pub fn ingest_token() -> Result<String, String> {
     token()
+}
+
+/// Recursively copy `src` into `dst`, creating directories as needed. Existing
+/// files are overwritten so a "set up extension" re-run always lands the bundled
+/// version (e.g. after an app update ships a newer extension).
+fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_all(&from, &to)?;
+        } else {
+            std::fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
+}
+
+/// Tauri command: stage the bundled browser extension into a stable, user-writable
+/// folder and return that absolute path.
+///
+/// The in-bundle resource dir is read-only/hidden (inside the .app / install dir),
+/// so Chrome's "Load unpacked" can't reliably point at it. We copy the resource's
+/// `extension/` folder into `app_data_dir()/extension` (recreated each call so it
+/// stays in sync with the installed app) and hand back that path for the guided
+/// "Load unpacked" step.
+#[tauri::command]
+pub fn prepare_extension(app: AppHandle) -> Result<String, String> {
+    let resource = app
+        .path()
+        .resource_dir()
+        .map_err(|e| format!("resource_dir: {e}"))?
+        .join("extension");
+    if !resource.is_dir() {
+        return Err(format!(
+            "bundled extension not found at {}",
+            resource.display()
+        ));
+    }
+
+    let dest: PathBuf = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app_data_dir: {e}"))?
+        .join("extension");
+
+    // Recreate from scratch so a stale copy never lingers across updates.
+    if dest.exists() {
+        std::fs::remove_dir_all(&dest)
+            .map_err(|e| format!("clear {}: {e}", dest.display()))?;
+    }
+    copy_dir_all(&resource, &dest).map_err(|e| format!("copy extension: {e}"))?;
+
+    Ok(dest.to_string_lossy().into_owned())
+}
+
+/// Tauri command: reveal `path` in the OS file manager (Finder / Explorer) so the
+/// user can point Chrome's "Load unpacked" at the staged extension folder.
+#[tauri::command]
+pub fn reveal_path(path: String) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("open {path}: {e}"))?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        std::process::Command::new("explorer")
+            .arg(&path)
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map_err(|e| format!("explorer {path}: {e}"))?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("xdg-open {path}: {e}"))?;
+    }
+    Ok(())
 }
 
 /// Body of a `POST /fdm/ingest` request.
@@ -277,6 +365,27 @@ mod tests {
         assert_eq!(b.cookie, None);
         assert_eq!(b.ua, None);
         assert_eq!(b.prompt, None);
+    }
+
+    #[test]
+    fn copy_dir_all_copies_nested_tree() {
+        let base = std::env::temp_dir().join(format!("fdm-ext-test-{}", std::process::id()));
+        let src = base.join("src");
+        let nested = src.join("sub");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(src.join("manifest.json"), b"{}").unwrap();
+        std::fs::write(nested.join("bg.js"), b"console.log(1)").unwrap();
+
+        let dst = base.join("dst");
+        copy_dir_all(&src, &dst).unwrap();
+
+        assert_eq!(std::fs::read(dst.join("manifest.json")).unwrap(), b"{}");
+        assert_eq!(
+            std::fs::read(dst.join("sub").join("bg.js")).unwrap(),
+            b"console.log(1)"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

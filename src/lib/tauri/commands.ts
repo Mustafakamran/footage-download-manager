@@ -150,6 +150,20 @@ export function ingestToken(): Promise<string> {
   return invoke<string>("ingest_token");
 }
 
+/**
+ * Stage the bundled browser extension into a stable, user-writable folder and
+ * return its absolute path. The in-bundle resource dir is read-only/hidden, so we
+ * copy it out before pointing Chrome's "Load unpacked" at it.
+ */
+export function prepareExtension(): Promise<string> {
+  return invoke<string>("prepare_extension");
+}
+
+/** Reveal a folder in the OS file manager (Finder / Explorer). */
+export function revealPath(path: string): Promise<void> {
+  return invoke("reveal_path", { path });
+}
+
 /** Write base64-encoded bytes to a path on disk (used to save an exported PDF). */
 export function writeBinaryFile(path: string, base64: string): Promise<void> {
   return invoke("write_binary_file", { path, base64 });
