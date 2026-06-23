@@ -198,17 +198,21 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
           )}
         </div>
 
-        {/* Sort: field picker + asc/desc toggle (+ folders-first) */}
-        <div className="flex overflow-hidden rounded-[8px] border border-[var(--border)]">
+        {/* Sort: field picker + asc/desc toggle (+ folders-first). No overflow-hidden
+            on the group — it would clip the dropdown; edge buttons are rounded instead. */}
+        <div className="flex rounded-[8px] border border-[var(--border)]">
           <div className="relative">
             <button
               onClick={() => setSortOpen((o) => !o)}
               title="Sort by"
-              className="flex items-center gap-2 px-3 py-1.5 text-sm text-[var(--text-2)] hover:bg-[var(--hover)] hover:text-[var(--text)]"
+              className="flex items-center gap-2 rounded-l-[7px] px-3 py-1.5 text-sm text-[var(--text-2)] hover:bg-[var(--hover)] hover:text-[var(--text)]"
             >
               {sortLabel} <ChevronDown size={14} />
             </button>
             {sortOpen && (
+              <>
+                {/* click-outside backdrop */}
+                <div className="fixed inset-0 z-10" onClick={() => setSortOpen(false)} />
               <div className="absolute right-0 top-9 z-20 w-44 overflow-hidden rounded-[8px] border border-[var(--border-strong)] bg-[var(--card)] py-1 shadow-[var(--shadow-lg)]">
                 {SORTS.map((o) => (
                   <button
@@ -236,13 +240,14 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
                   {sort.foldersFirst && <Check size={14} className="text-[var(--accent)]" />}
                 </button>
               </div>
+              </>
             )}
           </div>
           <button
             onClick={() => setSort((s) => ({ ...s, dir: s.dir === "asc" ? "desc" : "asc" }))}
             title={sort.dir === "asc" ? "Ascending — click for descending" : "Descending — click for ascending"}
             aria-label={`Sort direction: ${sort.dir === "asc" ? "ascending" : "descending"}`}
-            className="border-l border-[var(--border)] px-2 py-1.5 text-[var(--text-2)] hover:bg-[var(--hover)] hover:text-[var(--text)]"
+            className="rounded-r-[7px] border-l border-[var(--border)] px-2 py-1.5 text-[var(--text-2)] hover:bg-[var(--hover)] hover:text-[var(--text)]"
           >
             {sort.dir === "asc" ? <ArrowUp size={15} /> : <ArrowDown size={15} />}
           </button>
