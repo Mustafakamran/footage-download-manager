@@ -5,6 +5,7 @@ import { useUpdater } from "./store/updater";
 import { useToasts } from "./store/toast";
 import { useTransfers } from "./store/transfers";
 import { startWatching, stopWatching } from "./lib/watcher";
+import { startIngestListener } from "./lib/ingest";
 
 /** Re-check for an OTA update on this cadence so a release pushed while the app
  *  is open surfaces on its own (not just at launch / on a manual check). */
@@ -24,6 +25,9 @@ export default function App() {
         /* daemon may not be ready on first paint; AccountsView shows empty state */
       });
     startWatching();
+    // Listen for browser-extension captures (Rust emits "ingest-url" on a valid
+    // POST /fdm/ingest) and enqueue them into the default download folder.
+    const stopIngest = startIngestListener();
     // Check for an OTA update shortly after launch (silent if none / no runtime),
     // then on an interval so a release pushed while the app is open is noticed.
     const launch = setTimeout(() => void useUpdater.getState().check(), 3000);
@@ -32,6 +36,7 @@ export default function App() {
       clearTimeout(launch);
       clearInterval(poll);
       stopWatching();
+      stopIngest();
     };
   }, [loadAccounts]);
 

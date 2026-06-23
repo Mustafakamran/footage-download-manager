@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { useToasts } from "./toast";
 
 export interface ReviewComment {
   id: string;
@@ -24,11 +25,14 @@ function load(): Record<string, FileReview> {
     return {};
   }
 }
-function persist(data: Record<string, FileReview>) {
+/** Persist; returns false if the write failed (so callers can revert). */
+function persist(data: Record<string, FileReview>): boolean {
   try {
     localStorage.setItem(KEY, JSON.stringify(data));
+    return true;
   } catch {
     /* quota — comments are small (no images stored), so this is unlikely */
+    return false;
   }
 }
 
@@ -67,12 +71,17 @@ export const useReview = create<ReviewState>((set) => ({
       return { byFile: next };
     }),
 
+  // Optimistic: mark-reviewed updates the UI immediately, reverting if the write
+  // fails so the badge never lies about a status that wasn't saved.
   setStatus: (accountId, path, status) =>
     set((s) => {
       const k = fileKey(accountId, path);
       const cur = s.byFile[k] ?? EMPTY;
       const next = { ...s.byFile, [k]: { status, comments: cur.comments } };
-      persist(next);
+      if (!persist(next)) {
+        useToasts.getState().push("Couldn't save review status — storage full", "error");
+        return s;
+      }
       return { byFile: next };
     }),
 }));

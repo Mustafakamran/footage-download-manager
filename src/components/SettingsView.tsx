@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { FolderOpen, Check, RefreshCw, Download, Loader2, Layers } from "lucide-react";
+import { FolderOpen, Check, RefreshCw, Download, Loader2, Layers, Copy, Puzzle } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getVersion } from "@tauri-apps/api/app";
-import { getSecret, setSecret, SECRET_KEYS, bdmGetConfig, bdmSetConfig } from "../lib/tauri/commands";
+import { getSecret, setSecret, SECRET_KEYS, bdmGetConfig, bdmSetConfig, ingestToken } from "../lib/tauri/commands";
 import { Button, TextField, Card } from "./ui";
 import { useToasts } from "../store/toast";
 import { useTransfers } from "../store/transfers";
@@ -11,9 +11,13 @@ import { loadDlSettings, saveDlSettings, type DlSettings } from "../lib/dl-setti
 
 const FOLDER_KEY = "default_download_folder";
 
-type Tab = "general" | "google" | "dropbox" | "sync" | "updates";
+/** Fixed loopback port the ingest server binds (shared with the extension). */
+const INGEST_PORT = 53713;
+
+type Tab = "general" | "extension" | "google" | "dropbox" | "sync" | "updates";
 const TABS: { key: Tab; label: string }[] = [
   { key: "general", label: "General" },
+  { key: "extension", label: "Browser extension" },
   { key: "google", label: "Google Drive" },
   { key: "dropbox", label: "Dropbox" },
   { key: "sync", label: "Sync (BDM)" },
@@ -34,6 +38,29 @@ export function SettingsView() {
   const updater = useUpdater();
   const [appVersion, setAppVersion] = useState("");
   const [dl, setDl] = useState<DlSettings>(() => loadDlSettings());
+  const [token, setToken] = useState<string | null>(null);
+  const [tokenErr, setTokenErr] = useState(false);
+
+  // Load the pairing token lazily when the Browser-extension tab is first opened
+  // (it generates one on first read — no need to do it on every Settings mount).
+  useEffect(() => {
+    if (tab !== "extension" || token !== null) return;
+    let alive = true;
+    ingestToken()
+      .then((t) => alive && setToken(t))
+      .catch(() => alive && setTokenErr(true));
+    return () => {
+      alive = false;
+    };
+  }, [tab, token]);
+
+  function copyToken() {
+    if (!token) return;
+    navigator.clipboard
+      .writeText(token)
+      .then(() => markSaved("token", "Token copied"))
+      .catch(() => toast("Couldn't copy token", "error"));
+  }
 
   function setDlField(k: keyof DlSettings, v: number) {
     const next = { ...dl, [k]: Number.isFinite(v) && v >= 0 ? v : 0 };
@@ -136,7 +163,10 @@ export function SettingsView() {
         <div className="flex flex-col gap-4">
           <Card className="p-5">
             <h2 className="mb-1 text-sm font-semibold text-[var(--text)]">Default download folder</h2>
-            <p className="mb-4 text-xs text-[var(--text-3)]">Where downloads land unless overridden per job.</p>
+            <p className="mb-4 text-xs text-[var(--text-3)]">
+              Where downloads land unless overridden per job — also used for files sent from the browser extension.
+              Defaults to your system Downloads folder when unset.
+            </p>
             <div className="flex items-center gap-3">
               <div className="tnum min-w-0 flex-1 truncate rounded-[6px] border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-2)]">
                 {folder || "Not set"}
@@ -186,6 +216,52 @@ export function SettingsView() {
                 onChange={(e) => setDlField("bwLimitMbps", Number(e.target.value))}
               />
             </div>
+          </Card>
+        </div>
+      )}
+
+      {tab === "extension" && (
+        <div className="flex flex-col gap-4">
+          <Card className="p-5">
+            <h2 className="mb-1 flex items-center gap-2 text-sm font-semibold text-[var(--text)]">
+              <Puzzle size={16} /> Pairing token
+            </h2>
+            <p className="mb-4 text-xs text-[var(--text-3)]">
+              The FDM browser extension sends downloads to this app over a local connection. Paste this token
+              into the extension once to pair it. Keep it private — anyone with it can queue downloads on this machine.
+            </p>
+            <div className="flex items-center gap-3">
+              <div className="tnum min-w-0 flex-1 truncate rounded-[6px] border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-2)]">
+                {tokenErr ? "Unavailable (app not running in desktop mode)" : token ?? "Loading…"}
+              </div>
+              {tick("token")}
+              <Button variant="primary" onClick={copyToken} disabled={!token}>
+                <Copy size={16} /> Copy
+              </Button>
+            </div>
+            <div className="mt-3 text-xs text-[var(--text-3)]">
+              Listening on <span className="tnum text-[var(--text-2)]">127.0.0.1:{INGEST_PORT}</span>
+            </div>
+          </Card>
+
+          <Card className="p-5">
+            <h2 className="mb-1 text-sm font-semibold text-[var(--text)]">Install the extension</h2>
+            <ol className="ml-4 list-decimal space-y-1.5 text-xs text-[var(--text-2)]">
+              <li>
+                Open your browser's extensions page and enable{" "}
+                <span className="text-[var(--text)]">Developer mode</span>.
+              </li>
+              <li>
+                Click <span className="text-[var(--text)]">Load unpacked</span> and select the{" "}
+                <span className="tnum text-[var(--text)]">extension/</span> folder from the FDM install.
+              </li>
+              <li>Open the extension's options and paste the pairing token above.</li>
+              <li>
+                A green dot in the extension means it reached FDM on{" "}
+                <span className="tnum text-[var(--text-2)]">127.0.0.1:{INGEST_PORT}</span>. Now any captured file or
+                video lands in your default download folder.
+              </li>
+            </ol>
           </Card>
         </div>
       )}

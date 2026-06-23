@@ -135,6 +135,15 @@ export function streamBase(): Promise<string> {
   return invoke<string>("stream_base");
 }
 
+/**
+ * The persistent pairing token for the browser extension's loopback ingest.
+ * Generated on first call (stored in app config / keychain) and stable after.
+ * The extension sends it as the `X-FDM-Token` header on `POST /fdm/ingest`.
+ */
+export function ingestToken(): Promise<string> {
+  return invoke<string>("ingest_token");
+}
+
 /** Write base64-encoded bytes to a path on disk (used to save an exported PDF). */
 export function writeBinaryFile(path: string, base64: string): Promise<void> {
   return invoke("write_binary_file", { path, base64 });

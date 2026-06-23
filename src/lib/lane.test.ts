@@ -20,6 +20,10 @@ describe("laneOf", () => {
     expect(laneOf("http")).toBe("secondary");
   });
 
+  it("classifies ytdlp (browser-captured media) as secondary", () => {
+    expect(laneOf("ytdlp")).toBe("secondary");
+  });
+
   it("classifies unknown ids as secondary", () => {
     expect(laneOf("torrent_1")).toBe("secondary");
     expect(laneOf("")).toBe("secondary");

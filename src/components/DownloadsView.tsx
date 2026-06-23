@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { X, Check, AlertCircle, Ban, Clock, Pause, Play, Globe } from "lucide-react";
+import { X, Check, AlertCircle, Ban, Clock, Pause, Play, Globe, Download } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { useApp, type DownloadFilter } from "../store/app";
 import { useTransfers, type QueueItem } from "../store/transfers";
@@ -187,7 +187,17 @@ export function DownloadsView({ filter }: { filter: DownloadFilter }) {
           <div>
             {filter === "all" && <div className="mb-2 text-xs font-semibold tracking-wide text-[var(--text-3)]">HISTORY</div>}
             {histFiltered.length === 0 ? (
-              <div className="py-10 text-sm text-[var(--text-2)]">No downloads yet.</div>
+              <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
+                <div className="flex h-12 w-12 items-center justify-center rounded-full bg-[var(--accent-weak)] text-[var(--text-3)]">
+                  <Download size={20} />
+                </div>
+                <div className="text-sm font-medium text-[var(--text)]">
+                  {filter === "failed" ? "No failed downloads" : filter === "completed" ? "No completed downloads yet" : "No downloads yet"}
+                </div>
+                <p className="max-w-xs text-xs text-[var(--text-3)]">
+                  Select files in a connected account and hit Download, or paste a URL above to grab it from the web.
+                </p>
+              </div>
             ) : (
               <div className="flex flex-col">
                 {histFiltered.map((h) => {

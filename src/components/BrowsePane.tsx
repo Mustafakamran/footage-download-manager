@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Download, Loader2, AlertCircle, List as ListIcon, LayoutGrid, RefreshCw, Star, ChevronDown, Check, Play, FolderSearch } from "lucide-react";
+import { Download, Loader2, AlertCircle, List as ListIcon, LayoutGrid, RefreshCw, Star, ChevronDown, Check, Play, FolderSearch, FolderOpen, FileSearch } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useApp, type Section, type ReviewTarget } from "../store/app";
 import { isVideo, extOf } from "../lib/review";
@@ -11,7 +11,7 @@ import { useStarred } from "../store/starred";
 import { useSearch } from "../store/search";
 import { useAccountMeta, prettyLabel } from "../store/account-meta";
 import { ProviderIcon } from "./icons";
-import { Button } from "./ui";
+import { Button, Skeleton } from "./ui";
 import { fileType } from "../lib/file-types";
 import { recentFiles, itemAt } from "../lib/account-index";
 import { IndexProgress } from "./IndexProgress";
@@ -148,6 +148,7 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
         <div className="flex items-center gap-3 border-b border-[var(--border)] bg-[var(--surface)] px-5 py-2.5 text-sm text-[var(--text-2)]">
           <Loader2 size={15} className="animate-spin text-[var(--accent)]" />
           <span>Loading cached index…</span>
+          <Skeleton className="ml-1 h-2 w-24" />
         </div>
       )}
       {status === "crawling" && entry && <IndexProgress accountId={account.id} entry={entry} />}
@@ -217,9 +218,9 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
         )}
 
         {spinner ? (
-          <div className="flex items-center gap-2 py-12 text-sm text-[var(--text-2)]"><Loader2 className="animate-spin" size={16} /> {index ? "Loading…" : "Indexing…"}</div>
+          <FileListSkeleton />
         ) : items.length === 0 ? (
-          <div className="py-12 text-sm text-[var(--text-2)]">{q ? "No matches." : section === "starred" ? "No starred items yet." : "This folder is empty."}</div>
+          <EmptyState q={q} section={section} />
         ) : grid ? (
           <div className="grid grid-cols-[repeat(auto-fill,minmax(190px,1fr))] gap-3 py-2">
             {items.map((item) => {
@@ -331,6 +332,44 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
           <Button variant="primary" onClick={download}><Download size={16} /> Download</Button>
         </div>
       )}
+    </div>
+  );
+}
+
+/** Shimmer placeholder rows shown while a folder/index loads — shaped like the
+ *  file table so the transition to real rows reads as instant. */
+function FileListSkeleton() {
+  return (
+    <div className="py-2" data-testid="file-list-skeleton">
+      {Array.from({ length: 8 }).map((_, i) => (
+        <div key={i} className="flex items-center gap-3 border-b border-[var(--border)]/40 py-3">
+          <Skeleton className="h-[18px] w-[18px] shrink-0 rounded" />
+          <Skeleton className="h-3.5" style={{ width: `${30 + ((i * 13) % 45)}%` }} />
+          <div className="flex-1" />
+          <Skeleton className="h-3 w-28 shrink-0" />
+          <Skeleton className="h-3 w-16 shrink-0" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Friendly empty-state copy for the three empty cases (search / starred / folder). */
+function EmptyState({ q, section }: { q: string; section: Section }) {
+  const Icon = q ? FileSearch : section === "starred" ? Star : FolderOpen;
+  const title = q ? "No matches" : section === "starred" ? "No starred items yet" : "This folder is empty";
+  const body = q
+    ? `Nothing here matches “${q}”. Try a different search.`
+    : section === "starred"
+      ? "Star files and folders to pin them here for quick access."
+      : "Nothing to show in this folder.";
+  return (
+    <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
+      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-[var(--accent-weak)] text-[var(--text-3)]">
+        <Icon size={20} />
+      </div>
+      <div className="text-sm font-medium text-[var(--text)]">{title}</div>
+      <p className="max-w-xs text-xs text-[var(--text-3)]">{body}</p>
     </div>
   );
 }

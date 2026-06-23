@@ -10,6 +10,7 @@ import {
   type AccountIndex,
 } from "../lib/account-index";
 import type { Account } from "../lib/tauri/commands";
+import { useToasts } from "./toast";
 
 export type IndexStatus = "idle" | "loading" | "crawling" | "ready" | "error";
 
@@ -80,8 +81,17 @@ export const useIndex = create<IndexState>((set, get) => {
           });
         });
         await listen<{ accountId: string }>("index-ready", async (ev) => {
+          // Only toast when a crawl was actually in progress — not on the silent
+          // cached-index load that happens on every account open.
+          const wasCrawling = get().byAccount[ev.payload.accountId]?.status === "crawling";
           const idx = await indexGet(ev.payload.accountId);
           patch(ev.payload.accountId, { status: "ready", progress: blankProgress(), index: idx, error: undefined });
+          if (wasCrawling) {
+            const files = idx?.tree
+              ? Object.values(idx.tree).reduce((n, arr) => n + arr.filter((i) => !i.IsDir).length, 0)
+              : 0;
+            useToasts.getState().push(`Index complete · ${files.toLocaleString()} files`, "success");
+          }
         });
         await listen<{ accountId: string; error: string }>("index-error", (ev) => {
           patch(ev.payload.accountId, { status: "error", error: ev.payload.error });

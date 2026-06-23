@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import { listAccounts, removeAccount, type Account } from "../lib/tauri/commands";
 import { useIndex } from "./index-store";
+import { useToasts } from "./toast";
+import { prettyLabel } from "./account-meta";
 
 export type Section = "all" | "recent" | "starred" | "shared";
 
@@ -75,8 +77,10 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   removeAccount: async (id) => {
+    const acct = get().accounts.find((a) => a.id === id);
     await removeAccount(id);
     await useIndex.getState().remove(id);
     await get().loadAccounts();
+    useToasts.getState().push(`Removed ${acct ? prettyLabel(acct.label) : "account"}`, "success");
   },
 }));
