@@ -140,6 +140,7 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
   const indexItems = folderView ? index?.tree[path] : undefined;
   const liveItems = useBrowse((s) => (folderView ? s.listings[browseKey(account.id, path)] : undefined));
   const liveLoading = useBrowse((s) => (folderView ? s.loading[browseKey(account.id, path)] : false)) ?? false;
+  const liveError = useBrowse((s) => (folderView ? s.errors[browseKey(account.id, path)] : undefined));
 
   // List the current folder live whenever it changes — never wait for the crawl.
   useEffect(() => {
@@ -157,10 +158,22 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
     }
     if (section === "recent") return index ? recentFiles(index) : EMPTY;
     if (section === "starred") return index ? (starred.map((p) => itemAt(index, p)).filter(Boolean) as RcItem[]) : EMPTY;
-    // all / shared: the LIVE listing is the source of truth (instant); index
-    // entries are only a fallback shown until the live list arrives.
-    return (liveItems ?? indexItems) ?? EMPTY;
+    // all / shared: the LIVE listing is the source of truth (instant). If it's
+    // empty or failed, fall back to the background index so folders still show.
+    if (liveItems && liveItems.length) return liveItems;
+    if (indexItems && indexItems.length) return indexItems;
+    return liveItems ?? EMPTY;
   }, [index, q, section, starred, indexItems, liveItems]);
+
+  // Safety net: if the live listing failed OR came back empty at a spot that
+  // shouldn't be empty (the account root), kick the background index so folders
+  // still appear, and we have a fallback. Healthy live listings never trigger it.
+  useEffect(() => {
+    if (!folderView) return;
+    const liveEmptyAtRoot = path === "" && liveItems !== undefined && liveItems.length === 0;
+    if (liveError || liveEmptyAtRoot) void useIndex.getState().ensure(account);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [folderView, liveError, liveItems, path, account]);
 
   const items = useMemo(() => {
     return sortItems(base, sort, { sizeOf, dateOf });
@@ -229,6 +242,15 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
         </div>
       )}
       {status === "crawling" && entry && <IndexProgress accountId={account.id} entry={entry} />}
+
+      {/* Live-listing error (so a failed folder list isn't a silent empty screen). */}
+      {folderView && liveError && (
+        <div className="flex items-center gap-3 border-b border-[var(--border)] bg-[var(--surface)] px-5 py-2.5 text-sm text-[var(--error)]">
+          <AlertCircle size={15} className="shrink-0" />
+          <span className="min-w-0 flex-1 truncate" title={liveError}>Couldn’t list this folder: {liveError}</span>
+          <button className="shrink-0 underline hover:text-[var(--text)]" onClick={() => void useBrowse.getState().ensure(account, path, true)}>Retry</button>
+        </div>
+      )}
 
       {/* Toolbar */}
       <div className="flex items-center gap-3 px-6 py-4">
