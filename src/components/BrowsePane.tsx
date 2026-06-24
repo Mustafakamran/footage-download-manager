@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Download, Loader2, AlertCircle, List as ListIcon, LayoutGrid, RefreshCw, Star, ChevronDown, Check, Play, FolderSearch, FolderOpen, FileSearch, ArrowUp, ArrowDown, FolderTree, Trash2 } from "lucide-react";
+import { Download, Loader2, AlertCircle, List as ListIcon, LayoutGrid, RefreshCw, Star, ChevronDown, Check, Play, FolderSearch, FolderOpen, FileSearch, ArrowUp, ArrowDown, FolderTree, Trash2, Calculator, Copy } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useApp, type Section, type ReviewTarget } from "../store/app";
 import { isVideo, extOf } from "../lib/review";
@@ -12,6 +12,7 @@ import { useSearch } from "../store/search";
 import { useAccountMeta, prettyLabel } from "../store/account-meta";
 import { ProviderIcon } from "./icons";
 import { Button, Skeleton } from "./ui";
+import { ContextMenu, type MenuItem } from "./ui/ContextMenu";
 import { fileType } from "../lib/file-types";
 import { recentFiles, itemAt } from "../lib/account-index";
 import { IndexProgress } from "./IndexProgress";
@@ -91,26 +92,61 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
 
   const browseSizes = useBrowse((s) => s.sizes);
   const aggOf = (p: string) => index?.agg[p];
-  // Folder size: the index aggregate if a crawl captured it, else the lazily
-  // computed live size (operations/size), else unknown (0).
-  const folderBytes = (p: string): number => {
-    const agg = aggOf(p)?.size;
-    if (typeof agg === "number" && agg > 0) return agg;
+  // A folder is "indexed" once the crawl captured its subtree (children or aggregate present).
+  const folderIndexed = (p: string) => !!(index && (index.agg[p] || index.tree[p]));
+
+  // Folder-size resolution. Owned accounts are crawled once at link time, so the
+  // index aggregate gives an instant size. Shared ("Shared with me") folders are
+  // NOT in the index and intentionally NOT auto-walked — they can be enormous or
+  // not owned — so they read "unknown" until the user calculates one on demand.
+  type FolderSize =
+    | { kind: "known"; bytes: number }
+    | { kind: "loading" }
+    | { kind: "error" }
+    | { kind: "unknown" };
+  const folderSizeState = (p: string): FolderSize => {
+    if (folderIndexed(p)) return { kind: "known", bytes: aggOf(p)?.size ?? 0 };
     const v = browseSizes[browseKey(account.id, p)];
-    return typeof v === "number" ? v : 0;
+    if (typeof v === "number") return { kind: "known", bytes: v };
+    if (v === "loading") return { kind: "loading" };
+    if (v === "error") return { kind: "error" };
+    return { kind: "unknown" };
   };
-  const sizeOf = (i: RcItem) => (i.IsDir ? folderBytes(i.Path) : Math.max(0, i.Size));
+  const calcSize = (p: string) => void useBrowse.getState().computeSize(account, p);
+
+  const sizeOf = (i: RcItem): number => {
+    if (!i.IsDir) return Math.max(0, i.Size);
+    const st = folderSizeState(i.Path);
+    return st.kind === "known" ? st.bytes : 0;
+  };
   // Folder date: index "latest file" if crawled, else the folder's own mod time
   // (instant from the live listing). Files use their own mod time.
   const dateOf = (i: RcItem) => (i.IsDir ? (aggOf(i.Path)?.latest || i.ModTime) : i.ModTime);
-  // A folder is "indexed" once the crawl has captured its subtree (children or aggregate present).
-  const folderIndexed = (p: string) => !!(index && (index.agg[p] || index.tree[p]));
   const indexFolder = (folderPath: string) => void useIndex.getState().indexFolder(account, folderPath);
+
+  // Folder size cell: instant from the index, a spinner while computing, or a
+  // "Calculate" action for folders whose size we don't auto-compute (shared).
+  const renderFolderSize = (p: string) => {
+    const st = folderSizeState(p);
+    if (st.kind === "known") return st.bytes > 0 ? formatBytes(st.bytes) : "—";
+    if (st.kind === "loading") return <Loader2 size={13} className="inline animate-spin text-[var(--text-3)]" />;
+    return (
+      <button
+        onClick={() => calcSize(p)}
+        data-tip={st.kind === "error" ? "Couldn’t size this folder — click to retry" : "Calculate folder size on demand"}
+        className="rounded-[6px] px-1.5 py-0.5 text-xs text-[var(--text-3)] hover:bg-[var(--hover)] hover:text-[var(--accent)]"
+      >
+        {st.kind === "error" ? "Retry" : "Calculate"}
+      </button>
+    );
+  };
 
   // Delete (with confirm). Cloud deletes go to the provider Trash (recoverable).
   // pendingDelete holds one item (per-row trash) or many (selection-bar delete).
   const dropPath = useIndex((s) => s.dropPath);
   const [pendingDelete, setPendingDelete] = useState<RcItem[] | null>(null);
+  // Right-click context menu (cursor-anchored, one item at a time).
+  const [menu, setMenu] = useState<{ x: number; y: number; item: RcItem } | null>(null);
   const [deleting, setDeleting] = useState(false);
   async function confirmDelete() {
     const list = pendingDelete;
@@ -174,15 +210,10 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [base, sort, index, browseSizes]);
 
-  // Lazily compute recursive sizes for visible folders (background, capped queue).
-  // The index aggregate wins when present; otherwise this fills the Size column.
-  useEffect(() => {
-    if (!folderView || q.trim()) return;
-    for (const it of items) {
-      if (it.IsDir && !aggOf(it.Path)?.size) void useBrowse.getState().computeSize(account, it.Path);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, folderView, q, account]);
+  // NOTE: folder sizes are no longer auto-computed for every visible folder.
+  // Owned folders get an instant size from the persisted index; shared / unindexed
+  // folders show a "Calculate" action (renderFolderSize) so we never silently
+  // recursive-walk a huge shared drive the user didn't ask about.
 
   const allSelected = items.length > 0 && items.every((i) => selected.has(i.Path));
   const totalSelected = items.filter((i) => selected.has(i.Path)).reduce((s, i) => s + sizeOf(i), 0);
@@ -195,21 +226,43 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
     });
   }
 
-  async function download() {
-    if (selected.size === 0) return;
+  // Queue a set of items, prompting once for a destination folder if none is set.
+  async function enqueueItems(its: RcItem[]) {
+    if (its.length === 0) return;
     let dest = localStorage.getItem(FOLDER_KEY) ?? "";
     if (!dest) {
       const picked = await open({ directory: true, multiple: false });
       if (typeof picked !== "string") return;
       dest = picked;
     }
-    const chosen: DownloadItem[] = items
-      .filter((i) => selected.has(i.Path))
-      .map((i) => ({ path: i.Path, name: i.Name, isDir: i.IsDir, size: sizeOf(i), id: i.ID ?? "" }));
+    const chosen: DownloadItem[] = its.map((i) => ({ path: i.Path, name: i.Name, isDir: i.IsDir, size: sizeOf(i), id: i.ID ?? "" }));
     enqueue(account.id, chosen, dest);
     toast(`Queued ${chosen.length} download${chosen.length === 1 ? "" : "s"}`, "success");
+  }
+
+  async function download() {
+    if (selected.size === 0) return;
+    await enqueueItems(items.filter((i) => selected.has(i.Path)));
     setSelected(new Set());
   }
+
+  // Build the right-click menu for one item — reuses every existing row action.
+  const menuItems = (item: RcItem): MenuItem[] => {
+    const isStar = starred.includes(item.Path);
+    const out: MenuItem[] = [];
+    if (item.IsDir) {
+      out.push({ label: "Open", icon: FolderOpen, onClick: () => setView({ kind: "browse", accountId: account.id, section: "all", path: item.Path }) });
+      out.push({ label: "Calculate size", icon: Calculator, onClick: () => calcSize(item.Path) });
+      out.push({ label: folderIndexed(item.Path) ? "Re-index folder" : "Index folder", icon: FolderSearch, disabled: showCrawl, onClick: () => indexFolder(item.Path) });
+    } else if (isVideo(item.Name)) {
+      out.push({ label: "Open in review", icon: Play, onClick: () => openReview(account.id, reviewTarget(item)) });
+    }
+    out.push({ label: "Download", icon: Download, onClick: () => void enqueueItems([item]) });
+    out.push({ label: isStar ? "Unstar" : "Star", icon: Star, onClick: () => toggleStar(account.id, item.Path) });
+    out.push({ label: "Copy name", icon: Copy, separator: true, onClick: () => void navigator.clipboard?.writeText(item.Name) });
+    out.push({ label: "Delete", icon: Trash2, danger: true, separator: true, onClick: () => setPendingDelete([item]) });
+    return out;
+  };
 
   const segments = path ? path.split("/") : [];
   const showCrawl = status === "crawling" || status === "loading";
@@ -351,7 +404,7 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
             {items.map((item) => {
               const ft = fileType(item.Name, item.IsDir);
               return (
-                <div key={item.Path} className={`relative flex flex-col items-center gap-3 rounded-[11px] border p-5 ${selected.has(item.Path) ? "border-[var(--accent)] bg-[var(--card)]" : "border-[var(--border)] hover:bg-[var(--hover)]"}`}>
+                <div key={item.Path} onContextMenu={(e) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY, item }); }} className={`relative flex flex-col items-center gap-3 rounded-[11px] border p-5 ${selected.has(item.Path) ? "border-[var(--accent)] bg-[var(--card)]" : "border-[var(--border)] hover:bg-[var(--hover)]"}`}>
                   <input type="checkbox" aria-label={`Select ${item.Name}`} checked={selected.has(item.Path)} onChange={() => toggle(item.Path)} className="absolute left-3 top-3" />
                   <button
                     className="flex flex-col items-center gap-2 text-center"
@@ -364,7 +417,7 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
                     <ft.Icon size={30} style={{ color: ft.color }} />
                     <span className="line-clamp-2 text-sm text-[var(--text)]">{item.Name}</span>
                   </button>
-                  <span className="tnum text-xs text-[var(--text-3)]">{sizeOf(item) > 0 ? formatBytes(sizeOf(item)) : "—"}</span>
+                  <span className="tnum text-xs text-[var(--text-3)]">{item.IsDir ? renderFolderSize(item.Path) : item.Size > 0 ? formatBytes(item.Size) : "—"}</span>
                 </div>
               );
             })}
@@ -385,7 +438,7 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
                 const ft = fileType(item.Name, item.IsDir);
                 const isStar = starred.includes(item.Path);
                 return (
-                  <tr key={item.Path} className={`group border-b border-[var(--border)]/60 ${selected.has(item.Path) ? "bg-[var(--card)]" : "hover:bg-[var(--hover)]"}`}>
+                  <tr key={item.Path} onContextMenu={(e) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY, item }); }} className={`group border-b border-[var(--border)]/60 ${selected.has(item.Path) ? "bg-[var(--card)]" : "hover:bg-[var(--hover)]"}`}>
                     <td className="w-9 py-2.5 pl-1"><input type="checkbox" aria-label={`Select ${item.Name}`} checked={selected.has(item.Path)} onChange={() => toggle(item.Path)} /></td>
                     <td className="min-w-0 py-2.5 pr-3">
                       <div className="flex min-w-0 items-center gap-3">
@@ -441,7 +494,7 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
                       </div>
                     </td>
                     <td className="whitespace-nowrap py-2.5 text-[var(--text-3)]">{formatDate(dateOf(item))}</td>
-                    <td className="tnum whitespace-nowrap py-2.5 text-right text-[var(--text-2)]">{sizeOf(item) > 0 ? formatBytes(sizeOf(item)) : "—"}</td>
+                    <td className="tnum whitespace-nowrap py-2.5 text-right text-[var(--text-2)]">{item.IsDir ? renderFolderSize(item.Path) : item.Size > 0 ? formatBytes(item.Size) : "—"}</td>
                     <td className="py-2.5 pl-6 text-[var(--text-3)]">{ft.label}</td>
                   </tr>
                 );
@@ -471,7 +524,7 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
 
       {/* Delete confirmation (cloud deletes go to the provider Trash — recoverable). */}
       {pendingDelete && pendingDelete.length > 0 && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6" onClick={() => !deleting && setPendingDelete(null)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 p-6" onClick={() => !deleting && setPendingDelete(null)}>
           <div className="w-full max-w-md rounded-[12px] border border-[var(--border-strong)] bg-[var(--card)] p-5 shadow-[var(--shadow-lg)]" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-2 text-[var(--text)]">
               <Trash2 size={18} className="text-[var(--error)]" />
@@ -493,6 +546,9 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
           </div>
         </div>
       )}
+
+      {/* Right-click context menu */}
+      {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.item)} onClose={() => setMenu(null)} />}
     </div>
   );
 }

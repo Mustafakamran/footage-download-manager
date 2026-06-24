@@ -78,7 +78,7 @@ export function AddLinkDialog({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" role="dialog" aria-modal="true">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20" role="dialog" aria-modal="true">
       <Card className="animate-rise w-[460px] p-5 shadow-[var(--shadow-lg)]">
         <div className="mb-4 flex items-center justify-between">
           <h2 className="flex items-center gap-2 text-sm font-semibold text-[var(--text)]">

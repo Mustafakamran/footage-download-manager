@@ -129,6 +129,43 @@ input,
   animation: rise 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+/* Menu / popover entrance — quick scale-fade from the anchor. */
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+.animate-pop {
+  animation: pop 0.12s cubic-bezier(0.22, 1, 0.36, 1) both;
+  transform-origin: top left;
+}
+
+/* Tooltip fade-in (positioning transform is applied inline, so only fade here). */
+@keyframes tip {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.animate-tip {
+  animation: tip 0.1s ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-rise,
+  .animate-pop,
+  .animate-tip {
+    animation: none;
+  }
+}
+
 /* Skeleton shimmer — a moving highlight sweeps a muted placeholder block while
    real content loads. Honors prefers-reduced-motion (just a static fill). */
 @keyframes skeleton-shimmer {
