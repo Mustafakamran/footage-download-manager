@@ -110,6 +110,9 @@ pub fn config_create_args(
         // headless/remote machine and to skip the local browser OAuth flow,
         // which saves the remote with an EMPTY token. This app runs on the
         // user's desktop with a browser, so we use the default (local) flow.
+        // Full "drive" scope (not drive.readonly) so the app can delete the user's
+        // own files (download/browse still work). Existing accounts connected with
+        // the old read-only scope must be reconnected to gain delete permission.
         "drive" => vec![
             "config".into(),
             "create".into(),
@@ -120,7 +123,7 @@ pub fn config_create_args(
             "client_secret".into(),
             client_secret.into(),
             "scope".into(),
-            "drive.readonly".into(),
+            "drive".into(),
             "--config".into(),
             config_path.into(),
         ],
@@ -506,7 +509,7 @@ mod tests {
                 "client_secret",
                 "csecret",
                 "scope",
-                "drive.readonly",
+                "drive",
                 "--config",
                 "/data/rclone.conf",
             ]

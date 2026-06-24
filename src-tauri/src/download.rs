@@ -394,8 +394,20 @@ pub fn delete_item(
     let conn = connection(&rclone)?;
     let fs = account_fs(&account_id)?;
     let endpoint = if is_dir { "operations/purge" } else { "operations/deletefile" };
-    rc_post(&conn, endpoint, &json!({ "fs": fs, "remote": path }))?;
+    rc_post(&conn, endpoint, &json!({ "fs": fs, "remote": path })).map_err(humanize_delete_err)?;
     Ok(())
+}
+
+/// Turn rclone's raw delete failure into a human message for the common cases.
+fn humanize_delete_err(e: String) -> String {
+    if e.contains("ACCESS_TOKEN_SCOPE_INSUFFICIENT") || e.contains("insufficientPermissions") {
+        "Insufficient permission — this Google Drive account was connected read-only. \
+         Reconnect it (remove + add again) to grant delete access. Note: files shared with \
+         you but owned by someone else can't be deleted."
+            .into()
+    } else {
+        e
+    }
 }
 
 #[cfg(test)]
