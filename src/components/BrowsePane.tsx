@@ -357,10 +357,10 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
           <table className="w-full border-collapse text-sm">
             <thead>
               <tr className="sticky top-0 z-10 bg-[var(--surface)] text-left text-xs text-[var(--text-3)]">
-                <th className="w-9 py-2.5"><input type="checkbox" aria-label="Select all" checked={allSelected} onChange={() => setSelected(allSelected ? new Set() : new Set(items.map((i) => i.Path)))} /></th>
+                <th className="w-9 py-2.5 pl-1"><input type="checkbox" aria-label="Select all" checked={allSelected} onChange={() => setSelected(allSelected ? new Set() : new Set(items.map((i) => i.Path)))} /></th>
                 <th className="py-2.5 font-medium">Name</th>
-                <th className="w-44 py-2.5 font-medium">Modified</th>
-                <th className="w-28 py-2.5 text-right font-medium">Size</th>
+                <th className="w-44 whitespace-nowrap py-2.5 font-medium">Modified</th>
+                <th className="w-28 whitespace-nowrap py-2.5 text-right font-medium">Size</th>
                 <th className="w-28 py-2.5 pl-6 font-medium">Type</th>
               </tr>
             </thead>
@@ -370,7 +370,7 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
                 const isStar = starred.includes(item.Path);
                 return (
                   <tr key={item.Path} className={`group border-b border-[var(--border)]/60 ${selected.has(item.Path) ? "bg-[var(--card)]" : "hover:bg-[var(--hover)]"}`}>
-                    <td className="py-2.5 pl-1"><input type="checkbox" aria-label={`Select ${item.Name}`} checked={selected.has(item.Path)} onChange={() => toggle(item.Path)} /></td>
+                    <td className="w-9 py-2.5 pl-1"><input type="checkbox" aria-label={`Select ${item.Name}`} checked={selected.has(item.Path)} onChange={() => toggle(item.Path)} /></td>
                     <td className="min-w-0 py-2.5 pr-3">
                       <div className="flex min-w-0 items-center gap-3">
                         {item.IsDir ? (
@@ -424,8 +424,8 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
                         </button>
                       </div>
                     </td>
-                    <td className="py-2.5 text-[var(--text-3)]">{formatDate(dateOf(item))}</td>
-                    <td className="tnum py-2.5 text-right text-[var(--text-2)]">{sizeOf(item) > 0 ? formatBytes(sizeOf(item)) : "—"}</td>
+                    <td className="whitespace-nowrap py-2.5 text-[var(--text-3)]">{formatDate(dateOf(item))}</td>
+                    <td className="tnum whitespace-nowrap py-2.5 text-right text-[var(--text-2)]">{sizeOf(item) > 0 ? formatBytes(sizeOf(item)) : "—"}</td>
                     <td className="py-2.5 pl-6 text-[var(--text-3)]">{ft.label}</td>
                   </tr>
                 );
