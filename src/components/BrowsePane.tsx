@@ -75,13 +75,15 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
     }
   }, [sort]);
 
-  // Build the background index ONLY when something needs it — Recent, Starred, or
-  // Search. Plain folder browsing ("All Files") is live and never triggers a crawl,
-  // so opening an account is instant.
+  // Ensure the account's index is available for EVERY view that needs sizes/dates
+  // (folder browse included), not just Recent/Starred/Search. `ensure` →
+  // `index_start` loads the persisted index from disk FIRST (instant, silent) and
+  // only runs a fresh crawl when there's no cache — so an account that was crawled
+  // once at link time shows instant cached folder sizes/dates on every open, with
+  // no per-folder live size calls. (This does NOT reintroduce the old browse
+  // freeze: that was a fresh crawl kicked off on browse; a cached load is cheap.)
   useEffect(() => {
-    if (section === "recent" || section === "starred" || q.trim()) {
-      void useIndex.getState().ensure(account);
-    }
+    void useIndex.getState().ensure(account);
   }, [account, section, q]);
 
   const index = entry?.index ?? null;
