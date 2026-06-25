@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Download, Loader2, AlertCircle, List as ListIcon, LayoutGrid, RefreshCw, Star, ChevronDown, Check, Play, FolderSearch, FolderOpen, FileSearch, ArrowUp, ArrowDown, FolderTree, Trash2, Calculator, Copy } from "lucide-react";
+import { Download, Loader2, AlertCircle, List as ListIcon, LayoutGrid, RefreshCw, Star, ChevronDown, Check, Play, FolderSearch, FolderOpen, Folder, FileSearch, ArrowUp, ArrowDown, FolderTree, Trash2, Calculator, Copy } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useApp, type Section, type ReviewTarget } from "../store/app";
 import { isVideo, extOf } from "../lib/review";
@@ -463,30 +463,41 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
                 return (
                   <tr key={item.Path} onContextMenu={(e) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY, item }); }} className={`group border-b border-[var(--border)]/60 ${selected.has(item.Path) ? "bg-[var(--card)]" : "hover:bg-[var(--hover)]"}`}>
                     <td className="w-9 py-2.5 pl-1"><input type="checkbox" aria-label={`Select ${item.Name}`} checked={selected.has(item.Path)} onChange={() => toggle(item.Path)} /></td>
-                    <td className="min-w-0 py-2 pr-3">
-                      <div className="flex min-w-0 items-center gap-2">
-                        {/* Name — grows and truncates so the row never gets jagged. */}
-                        {item.IsDir ? (
-                          <button className="flex min-w-0 flex-1 items-center gap-2.5 text-left text-[var(--text)] hover:text-[var(--accent)]" onClick={() => setView({ kind: "browse", accountId: account.id, section: "all", path: item.Path })}>
-                            <ft.Icon size={18} style={{ color: ft.color }} className="shrink-0" />
-                            <span className="truncate">{item.Name}</span>
-                          </button>
-                        ) : isVideo(item.Name) ? (
-                          <button
-                            className="flex min-w-0 flex-1 items-center gap-2.5 text-left text-[var(--text)] hover:text-[var(--accent)]"
-                            onClick={() => openReview(account.id, reviewTarget(item))}
-                            data-tip="Open in review"
-                          >
-                            <ft.Icon size={18} style={{ color: ft.color }} className="shrink-0" />
-                            <span className="truncate">{item.Name}</span>
-                            <Play size={12} className="shrink-0 text-[var(--text-3)] opacity-0 group-hover:opacity-100" />
-                          </button>
-                        ) : (
-                          <span className="flex min-w-0 flex-1 items-center gap-2.5 text-[var(--text)]">
-                            <ft.Icon size={18} style={{ color: ft.color }} className="shrink-0" />
-                            <span className="truncate">{item.Name}</span>
-                          </span>
-                        )}
+                    <td className="min-w-0 py-1.5 pr-3">
+                      <div className="flex min-w-0 items-center gap-3">
+                        {/* Icon tile + name/sub. The whole block is the open/review
+                            affordance for folders and videos; a plain span otherwise. */}
+                        {(() => {
+                          const ext = extOf(item.Name).replace(/^\./, "").slice(0, 4).toUpperCase();
+                          const sub = item.IsDir ? "" : `${ext || "FILE"}${item.Size > 0 ? ` · ${formatBytes(item.Size)}` : ""}`;
+                          const tile = item.IsDir ? (
+                            <span className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-[11px] bg-[var(--accw)]">
+                              <Folder size={18} className="text-[var(--acc)]" />
+                            </span>
+                          ) : (
+                            <span className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-[11px] font-mono text-[9.5px] font-semibold" style={{ background: "var(--accw)", color: ft.color }}>
+                              {ext || "FILE"}
+                            </span>
+                          );
+                          const body = (
+                            <>
+                              {tile}
+                              <span className="min-w-0 flex-1">
+                                <span className="flex items-center gap-1.5">
+                                  <span className="truncate text-[13.5px] font-medium text-[var(--ink)]">{item.Name}</span>
+                                  {isStar && <Star size={11} fill="currentColor" className="shrink-0 text-[var(--warn)]" />}
+                                  {!item.IsDir && isVideo(item.Name) && <Play size={11} className="shrink-0 text-[var(--faint)] opacity-0 group-hover:opacity-100" />}
+                                </span>
+                                {sub && <span className="block truncate text-[11.5px] text-[var(--faint)]">{sub}</span>}
+                              </span>
+                            </>
+                          );
+                          if (item.IsDir)
+                            return <button className="flex min-w-0 flex-1 items-center gap-3 text-left" onClick={() => setView({ kind: "browse", accountId: account.id, section: "all", path: item.Path })}>{body}</button>;
+                          if (isVideo(item.Name))
+                            return <button className="flex min-w-0 flex-1 items-center gap-3 text-left" data-tip="Open in review" onClick={() => openReview(account.id, reviewTarget(item))}>{body}</button>;
+                          return <span className="flex min-w-0 flex-1 items-center gap-3">{body}</span>;
+                        })()}
                         {/* Fixed action cluster — reserved width (opacity, not display),
                             so revealing it on hover never shifts the layout. */}
                         <div className="flex shrink-0 items-center gap-0.5">
