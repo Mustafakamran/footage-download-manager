@@ -405,6 +405,12 @@ fn humanize_delete_err(e: String) -> String {
          Reconnect it (remove + add again) to grant delete access. Note: files shared with \
          you but owned by someone else can't be deleted."
             .into()
+    } else if e.contains("files.content.write") || e.contains("missing_scope") {
+        "Dropbox delete needs the 'files.content.write' permission, which this Dropbox app \
+         doesn't have yet. Open the Dropbox App Console (dropbox.com/developers/apps) → your app \
+         → Permissions, tick 'files.content.write' (and 'files.content.read'), click Submit, then \
+         reconnect this account in FDM (remove + add again) so the new permission takes effect."
+            .into()
     } else {
         e
     }
