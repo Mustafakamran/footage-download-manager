@@ -17,9 +17,11 @@ export interface AppSettings {
    * quota and hammer the same daemon that serves live browsing. Opt-in.
    */
   autoIndex: boolean;
+  /** Show the floating Transfers drawer (collapses to a circular button). */
+  showTransferDrawer: boolean;
 }
 
-const DEFAULTS: AppSettings = { autoIndex: false };
+const DEFAULTS: AppSettings = { autoIndex: false, showTransferDrawer: true };
 
 function load(): AppSettings {
   return { ...DEFAULTS, ...loadJson<Partial<AppSettings>>(KEY, {}) };
@@ -27,13 +29,20 @@ function load(): AppSettings {
 
 interface SettingsState extends AppSettings {
   setAutoIndex: (v: boolean) => void;
+  setShowTransferDrawer: (v: boolean) => void;
 }
 
-export const useSettings = create<SettingsState>((set) => ({
-  ...load(),
-
-  setAutoIndex: (autoIndex) => {
-    saveJson(KEY, { autoIndex });
-    set({ autoIndex });
-  },
-}));
+export const useSettings = create<SettingsState>((set, get) => {
+  const pick = (s: AppSettings): AppSettings => ({ autoIndex: s.autoIndex, showTransferDrawer: s.showTransferDrawer });
+  // Persist the WHOLE settings object on any change (so one setter never drops
+  // the others' values).
+  const persist = (patch: Partial<AppSettings>) => {
+    saveJson(KEY, { ...pick(get()), ...patch });
+    set(patch);
+  };
+  return {
+    ...load(),
+    setAutoIndex: (autoIndex) => persist({ autoIndex }),
+    setShowTransferDrawer: (showTransferDrawer) => persist({ showTransferDrawer }),
+  };
+});

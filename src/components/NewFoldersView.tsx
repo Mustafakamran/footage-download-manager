@@ -31,7 +31,7 @@ export function NewFoldersView() {
   const setFolderStatus = useFolderStatus((s) => s.set);
   const visitedByAccount = useVisited((s) => s.byAccount);
   const [menu, setMenu] = useState<{ x: number; y: number; account: Account; folder: RcItem } | null>(null);
-  const [share, setShare] = useState<{ account: Account; item: RcItem } | null>(null);
+  const [share, setShare] = useState<{ account: Account; item: RcItem; anchor: { x: number; y: number } } | null>(null);
 
   const menuItems = (account: Account, folder: RcItem): MenuItem[] => {
     const cur = statusByAccount[account.id]?.[folder.Path];
@@ -41,7 +41,7 @@ export function NewFoldersView() {
       separator: i === 0,
       onClick: () => setFolderStatus(account.id, folder.Path, cur === st ? null : st),
     }));
-    items.push({ label: "Copy link", icon: Link2, separator: true, onClick: () => setShare({ account, item: folder }) });
+    items.push({ label: "Copy link", icon: Link2, separator: true, onClick: () => setShare({ account, item: folder, anchor: { x: menu?.x ?? window.innerWidth / 2, y: menu?.y ?? window.innerHeight / 2 } }) });
     return items;
   };
 
@@ -115,7 +115,7 @@ export function NewFoldersView() {
       )}
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.account, menu.folder)} onClose={() => setMenu(null)} />}
-      {share && <SharePopover account={share.account} item={share.item} onClose={() => setShare(null)} />}
+      {share && <SharePopover account={share.account} item={share.item} anchor={share.anchor} onClose={() => setShare(null)} />}
     </div>
   );
 }

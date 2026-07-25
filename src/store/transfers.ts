@@ -374,7 +374,11 @@ interface TransfersState {
   concurrency: number;
   secondaryConcurrency: number;
   dockOpen: boolean;
+  /** True while an in-app file/folder drag is in flight — reveals the Transfers
+   *  drawer as a drop-to-download target even when it's otherwise empty. */
+  dragActive: boolean;
 
+  setDragActive: (active: boolean) => void;
   setDockOpen: (open: boolean) => void;
   setConcurrency: (n: number) => void;
   setSecondaryConcurrency: (n: number) => void;
@@ -417,6 +421,9 @@ export const useTransfers = create<TransfersState>((set, get) => ({
   concurrency: loadConcurrency(),
   secondaryConcurrency: loadSecondaryConcurrency(),
   dockOpen: true,
+  dragActive: false,
+
+  setDragActive: (active) => set({ dragActive: active }),
 
   setDockOpen: (dockOpen) => set({ dockOpen }),
 

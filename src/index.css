@@ -1,8 +1,7 @@
 @import "tailwindcss";
-@config "../tailwind.config.js";
-
 /* JetBrains Mono — the design's mono voice (sizes, counts, code-like labels). */
 @import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap");
+@config "../tailwind.config.js";
 
 /* ─────────────────────────────────────────────────────────────────────────
    FetchDM Studio design tokens.
@@ -362,6 +361,57 @@ input[type="checkbox"]:active {
   transform-origin: top left;
 }
 
+/* Transfers drawer expanding out of its collapsed circular button: grows from
+   the bottom-right corner (where the button sits), morphing the border-radius
+   from a circle toward the rounded rectangle while the contents scale in. */
+@keyframes drawer-expand {
+  from {
+    opacity: 0;
+    transform: scale(0.45);
+    border-radius: 28px;
+  }
+  60% {
+    opacity: 1;
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+    border-radius: 14px;
+  }
+}
+.animate-drawer {
+  animation: drawer-expand 0.34s var(--ease-out) both;
+  transform-origin: bottom right;
+  will-change: transform, opacity;
+}
+/* Reverse: the drawer shrinks back into the circular button. */
+@keyframes drawer-collapse {
+  from {
+    opacity: 1;
+    transform: scale(1);
+    border-radius: 14px;
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.45);
+    border-radius: 28px;
+  }
+}
+.animate-drawer-out {
+  animation: drawer-collapse 0.26s var(--ease-out) both;
+  transform-origin: bottom right;
+  will-change: transform, opacity;
+}
+/* The button and the drawer's inner content fade/slide in just after the shell
+   starts opening, so the icon + title feel like they travel into place. */
+@keyframes drawer-content {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-drawer-content {
+  animation: drawer-content 0.28s var(--ease-out) 0.06s both;
+}
+
 /* Flash a row/card that was jumped to (e.g. from a search result) so the eye
    catches it. Pulses the accent tint a couple of times, then settles. */
 @keyframes flashrow {
@@ -483,6 +533,9 @@ input[type="checkbox"]:active {
 @media (prefers-reduced-motion: reduce) {
   .animate-rise,
   .animate-pop,
+  .animate-drawer,
+  .animate-drawer-out,
+  .animate-drawer-content,
   .animate-tip,
   .animate-dropdown,
   .animate-item,

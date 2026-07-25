@@ -1,7 +1,9 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronUp, X, Check, AlertCircle, Ban, Clock, Pause, Play, Globe, ArrowDown, ArrowUp, ArrowDownUp } from "lucide-react";
+import { memo, useMemo, useState } from "react";
+import { ChevronDown, X, Check, AlertCircle, Ban, Clock, Pause, Play, Globe, ArrowDown, ArrowUp, ArrowDownUp } from "lucide-react";
 import { useTransfers, type QueueItem } from "../store/transfers";
+import { useHistory, type HistoryEntry } from "../store/history";
 import { useApp } from "../store/app";
+import { useSettings } from "../store/settings";
 import { fileType } from "../lib/file-types";
 import { laneOf } from "../lib/lane";
 import { formatBytes, formatSpeed, formatEta } from "../lib/format";
@@ -110,41 +112,42 @@ const Row = memo(function Row({ job, labelOf }: { job: JobStatus; labelOf: Label
   const barColor = job.cancelled ? "var(--faint)" : failed ? "var(--err)" : "var(--dl)";
 
   return (
-    <div className="group flex items-center gap-2.5 px-3.5 py-2">
+    <div className="group relative flex items-center gap-2.5 overflow-hidden px-3.5 py-2.5">
+      {/* Dropbox-style row-fill: a tinted highlight grows left→right across the
+          whole row as the transfer progresses, behind the content. */}
+      {active && (
+        <div
+          className="pointer-events-none absolute inset-y-0 left-0 transition-[width] duration-500 ease-out"
+          style={{ width: `${p}%`, backgroundColor: barColor, opacity: 0.14 }}
+        />
+      )}
       <span className="relative shrink-0">
         <ft.Icon size={17} style={{ color: ft.color }} />
         <Dir size={9} className="absolute -bottom-1 -right-1 rounded-full bg-[var(--card)] text-[var(--faint)]" />
       </span>
-      <div className="min-w-0 flex-1">
+      <div className="relative min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
           <span className="truncate text-[12.5px] text-[var(--ink)]" title={job.name}>{job.name}</span>
           <LaneBadge accountId={job.accountId} labelOf={labelOf} />
         </div>
-        {active ? (
-          <div className="mt-1 flex items-center gap-2">
-            <div className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-[var(--soft)]">
-              <div className="h-full rounded-full transition-[width] duration-500" style={{ width: `${p}%`, backgroundColor: barColor }} />
-            </div>
-            <span className="tnum shrink-0 text-[10px] text-[var(--faint)]">
+        <div className="tnum mt-0.5 text-[10.5px] leading-tight text-[var(--faint)]">
+          {active ? (
+            <>
               {formatBytes(job.bytes)} / {formatBytes(job.totalBytes || job.bytes)}
               {job.speed > 0 ? ` · ${formatSpeed(job.speed)}` : ""}
               {job.eta != null ? ` · ${formatEta(job.eta)} left` : ""}
-            </span>
-          </div>
-        ) : (
-          <div className="flex items-center gap-1 text-[10.5px]">
-            {job.cancelled ? (
-              <span className="text-[var(--faint)]">Cancelled</span>
-            ) : failed ? (
-              <span className="truncate text-[var(--err)]" title={job.error}>{job.error || "Failed"}</span>
-            ) : (
-              <span className="text-[var(--faint)]">{isUpload ? "Uploaded" : "Downloaded"} · {formatBytes(job.totalBytes || job.bytes)}</span>
-            )}
-          </div>
-        )}
+            </>
+          ) : job.cancelled ? (
+            <span className="text-[var(--faint)]">Cancelled</span>
+          ) : failed ? (
+            <span className="text-[var(--err)]" title={job.error}>{job.error || "Failed"}</span>
+          ) : (
+            <span>{isUpload ? "Uploaded" : "Downloaded"} · {formatBytes(job.totalBytes || job.bytes)}</span>
+          )}
+        </div>
       </div>
 
-      <span className="flex w-5 shrink-0 justify-end">
+      <span className="relative flex w-9 shrink-0 justify-end">
         {job.cancelled ? <Ban size={14} className="text-[var(--faint)]" />
           : job.finished && job.success ? <Check size={14} className="text-[var(--ok)]" />
           : failed ? <span title={job.error}><AlertCircle size={14} className="text-[var(--err)]" /></span>
@@ -152,18 +155,52 @@ const Row = memo(function Row({ job, labelOf }: { job: JobStatus; labelOf: Label
       </span>
 
       {active ? (
-        <div className="flex shrink-0 items-center gap-0.5">
+        <div className="relative flex shrink-0 items-center gap-0.5">
           {!isUpload && <button onClick={() => pause(job.jobId)} aria-label={`Pause ${job.name}`} title="Pause" className="flex h-6 w-6 items-center justify-center rounded-[7px] text-[var(--faint)] hover:bg-[var(--soft)] hover:text-[var(--acc)]"><Pause size={13} /></button>}
           <button onClick={() => cancel(job.jobId)} aria-label={`Cancel ${job.name}`} title="Cancel" className="flex h-6 w-6 items-center justify-center rounded-[7px] text-[var(--faint)] hover:bg-[var(--soft)] hover:text-[var(--err)]"><X size={13} /></button>
         </div>
       ) : isUpload ? (
-        <button onClick={() => dismissUpload(job.jobId)} aria-label={`Dismiss ${job.name}`} title="Dismiss" className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[7px] text-[var(--faint)] opacity-0 transition hover:bg-[var(--soft)] hover:text-[var(--ink)] group-hover:opacity-100"><X size={13} /></button>
+        <button onClick={() => dismissUpload(job.jobId)} aria-label={`Dismiss ${job.name}`} title="Dismiss" className="relative flex h-6 w-6 shrink-0 items-center justify-center rounded-[7px] text-[var(--faint)] opacity-0 transition hover:bg-[var(--soft)] hover:text-[var(--ink)] group-hover:opacity-100"><X size={13} /></button>
       ) : (
         <span className="w-6 shrink-0" />
       )}
     </div>
   );
 }, jobRowPropsEqual);
+
+/** Finished transfer from persisted history (completed/failed/cancelled) —
+ *  mirrors what the full Transfers screen shows so the drawer isn't empty after
+ *  jobs settle out of memory. */
+const HistoryRow = memo(function HistoryRow({ h, labelOf }: { h: HistoryEntry; labelOf: LabelOf }) {
+  const ft = fileType(h.name, false);
+  const ok = h.status === "success";
+  const failed = h.status === "failed";
+  return (
+    <div className="group flex items-center gap-2.5 px-3.5 py-2.5">
+      <span className="relative shrink-0">
+        <ft.Icon size={17} style={{ color: ft.color }} />
+        <ArrowDown size={9} className="absolute -bottom-1 -right-1 rounded-full bg-[var(--card)] text-[var(--faint)]" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5">
+          <span className="truncate text-[12.5px] text-[var(--ink)]" title={h.name}>{h.name}</span>
+          <LaneBadge accountId={h.accountId} labelOf={labelOf} />
+        </div>
+        <div className="mt-0.5 text-[10.5px] leading-tight text-[var(--faint)]">
+          {ok ? <>Downloaded · {formatBytes(h.size)}</>
+            : failed ? <span className="text-[var(--err)]" title={h.error}>{h.error || "Failed"}</span>
+            : <>Cancelled · {formatBytes(h.size)}</>}
+        </div>
+      </div>
+      <span className="flex w-9 shrink-0 justify-end">
+        {ok ? <Check size={14} className="text-[var(--ok)]" />
+          : failed ? <AlertCircle size={14} className="text-[var(--err)]" />
+          : <Ban size={14} className="text-[var(--faint)]" />}
+      </span>
+      <span className="w-6 shrink-0" />
+    </div>
+  );
+});
 
 /**
  * Floating Transfers drawer (Dropbox-style): a collapsible bottom-right panel
@@ -175,79 +212,103 @@ export function DownloadsDock() {
   const jobs = useTransfers((s) => s.jobs);
   const queue = useTransfers((s) => s.queue);
   const uploads = useTransfers((s) => s.uploads);
-  const clearFinished = useTransfers((s) => s.clearFinished);
+  const dragActive = useTransfers((s) => s.dragActive);
+  const history = useHistory((s) => s.items);
   const accounts = useApp((s) => s.accounts);
   const labelOf = useMemo<LabelOf>(() => {
     const byId = new Map(accounts.map((a) => [a.id, a.label]));
     return (id: string) => byId.get(id) ?? id;
   }, [accounts]);
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
+  const [collapsing, setCollapsing] = useState(false);
   const [tab, setTab] = useState<Tab>("all");
-  // Manual dismiss: the drawer no longer vanishes on cancel/finish — it stays
-  // until the user closes it (X). A new transfer starting un-dismisses it.
-  const [dismissed, setDismissed] = useState(false);
+  const showDrawer = useSettings((s) => s.showTransferDrawer);
+  // Collapse plays the reverse morph; the drawer's onAnimationEnd then swaps to
+  // the button (more reliable than a fixed timer).
+  const collapse = () => setCollapsing(true);
 
   const isActive = (j: JobStatus) => !j.finished && !j.cancelled;
   const activeJobs = jobs.filter(isActive);
-  const doneJobs = jobs.filter((j) => !isActive(j));
   const activeUploads = uploads.filter(isActive);
   const doneUploads = uploads.filter((j) => !isActive(j));
 
   const activeCount = activeJobs.length + activeUploads.length + queue.filter((q) => !q.paused).length;
-  // Re-open the drawer when fresh activity starts after a manual dismiss.
-  const prevActive = useRef(activeCount);
-  useEffect(() => {
-    if (activeCount > prevActive.current) setDismissed(false);
-    prevActive.current = activeCount;
-  }, [activeCount]);
 
-  // Visible while ANY transfer exists (active, queued, or finished history) and
-  // the user hasn't dismissed it. Cancelling/finishing keeps it up — the user
-  // closes it themselves, or hits Clear to drop finished rows.
-  const hasAny = jobs.length > 0 || uploads.length > 0 || queue.length > 0;
-  if (!hasAny || dismissed) return null;
+  // The drawer is a PERSISTENT feature (collapses to a circular button); it's
+  // hidden entirely only when the user turns it off in Settings.
+  if (!showDrawer) return null;
 
-  const allTransfers = [...jobs, ...uploads];
-  const completedCount = allTransfers.filter((j) => j.finished && j.success).length;
-  const failedCount = allTransfers.filter((j) => j.finished && !j.success && !j.cancelled).length;
+  // Dragging an app file/folder forces the panel open so it's a drop target.
+  // Keep the panel mounted WHILE collapsing so its exit animation can play.
+  const expanded = open || dragActive || collapsing;
 
-  // Row order: in-flight first (downloads, uploads), then queued, then finished.
-  let dlRows = activeJobs;
-  let ulRows = activeUploads;
-  let queueRows = queue;
-  let doneRows = [...doneJobs, ...doneUploads];
-  if (tab === "active") { doneRows = []; }
-  else if (tab === "completed") { dlRows = []; ulRows = []; queueRows = []; doneRows = allTransfers.filter((j) => j.finished && j.success); }
-  else if (tab === "failed") { dlRows = []; ulRows = []; queueRows = []; doneRows = allTransfers.filter((j) => j.finished && !j.success && !j.cancelled); }
+  // Collapsed → floating circular button (bottom-right). Click to expand.
+  if (!expanded) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        aria-label="Open transfers"
+        className="group animate-pop fixed bottom-4 right-4 z-40 flex h-14 w-14 items-center justify-center rounded-full border border-[var(--line2)] bg-[var(--card)] text-[var(--acc)] shadow-[var(--shadow-lg)] transition-shadow duration-200 hover:shadow-[0_10px_30px_-6px_rgba(0,0,0,0.35)]"
+      >
+        <ArrowDownUp size={20} className="transition-transform duration-200 group-hover:-translate-y-0.5" />
+        {activeCount > 0 && (
+          <span className="tnum absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-[var(--acc)] px-1 text-[10px] font-bold text-[var(--onacc)]">
+            {activeCount > 9 ? "9+" : activeCount}
+          </span>
+        )}
+      </button>
+    );
+  }
+
+  // Finished transfers come from persisted HISTORY (like the Transfers screen),
+  // not the in-memory jobs array (which drops jobs once they settle) — plus any
+  // finished uploads (uploads aren't persisted to history).
+  const histCompleted = history.filter((h) => h.status === "success");
+  const histFailed = history.filter((h) => h.status === "failed");
+  const upDone = doneUploads;
+  const completedCount = histCompleted.length + upDone.filter((u) => u.success).length;
+  const failedCount = histFailed.length + upDone.filter((u) => !u.success && !u.cancelled).length;
+
+  // Which sections to render for the active tab.
+  const showActive = tab === "all" || tab === "active";
+  const dlRows = showActive ? activeJobs : [];
+  const ulRows = showActive ? activeUploads : [];
+  const queueRows = showActive ? queue : [];
+  const historyRows = tab === "completed" ? histCompleted : tab === "failed" ? histFailed : tab === "all" ? history : [];
+  const upDoneRows = tab === "completed" ? upDone.filter((u) => u.success)
+    : tab === "failed" ? upDone.filter((u) => !u.success && !u.cancelled)
+    : tab === "all" ? upDone : [];
 
   // Total progress across active downloads + uploads.
   const activeAll = [...activeJobs, ...activeUploads];
-  const totalBytes = activeAll.reduce((s, j) => s + (j.totalBytes || 0), 0);
-  const doneBytes = activeAll.reduce((s, j) => s + j.bytes, 0);
-  const totalPct = totalBytes > 0 ? Math.min(100, Math.round((doneBytes / totalBytes) * 100)) : 0;
   const totalSpeed = activeAll.reduce((s, j) => s + Math.max(0, j.speed), 0);
 
-  const empty = dlRows.length === 0 && ulRows.length === 0 && queueRows.length === 0 && doneRows.length === 0;
+  const empty = dlRows.length === 0 && ulRows.length === 0 && queueRows.length === 0 && historyRows.length === 0 && upDoneRows.length === 0;
 
   return (
-    <div className="animate-pop fixed bottom-3 right-3 z-40 flex w-[384px] max-w-[calc(100vw-24px)] flex-col overflow-hidden rounded-[14px] border border-[var(--line2)] bg-[var(--card)] shadow-[var(--shadow-lg)]">
-      {/* Header */}
-      <div className="flex items-center gap-2 px-3.5 py-2.5">
-        <button onClick={() => setOpen((o) => !o)} aria-label={open ? "Collapse transfers" : "Expand transfers"} className="flex min-w-0 flex-1 items-center gap-2 text-[13px] font-semibold text-[var(--ink)]">
+    <div
+      data-transfer-drop
+      onAnimationEnd={(e) => { if (collapsing && e.animationName === "drawer-collapse") { setCollapsing(false); setOpen(false); } }}
+      className={`${collapsing ? "animate-drawer-out" : "animate-drawer"} fixed bottom-3 right-3 z-40 flex w-[400px] max-w-[calc(100vw-24px)] flex-col overflow-hidden rounded-[14px] border bg-[var(--card)] shadow-[var(--shadow-lg)] ${dragActive ? "border-2 border-dashed border-[var(--acc)]" : "border border-[var(--line2)]"}`}
+    >
+      {/* Drop-to-download hint while dragging an app file/folder onto the drawer. */}
+      {dragActive && (
+        <div className="pointer-events-none flex items-center justify-center gap-2 border-b border-[var(--line)] bg-[var(--accw)] px-4 py-3 text-[12.5px] font-semibold text-[var(--acc)]">
+          <ArrowDown size={15} /> Drop here to download
+        </div>
+      )}
+      {/* Header — collapse to the circular button (no close/clear: it's a
+          persistent feature, toggled in Settings). */}
+      <div className="animate-drawer-content flex items-center gap-2 px-3.5 py-2.5">
+        <button onClick={collapse} aria-label="Collapse transfers" className="flex min-w-0 flex-1 items-center gap-2 text-[13px] font-semibold text-[var(--ink)]">
           <ArrowDownUp size={15} className="shrink-0 text-[var(--acc)]" />
           <span>Transfers</span>
           {activeCount > 0 && <span className="tnum text-[var(--mut)]">· {activeCount} active</span>}
-          <span title={open ? "Collapse" : "Expand"} className="ml-auto flex h-6 w-6 items-center justify-center text-[var(--faint)]">{open ? <ChevronDown size={16} /> : <ChevronUp size={16} />}</span>
-        </button>
-        {(completedCount > 0 || failedCount > 0) && (
-          <button onClick={() => clearFinished()} title="Clear finished" className="shrink-0 text-[11px] font-medium text-[var(--faint)] hover:text-[var(--ink)]">Clear</button>
-        )}
-        <button onClick={() => setDismissed(true)} title="Close" aria-label="Close transfers" className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[6px] text-[var(--faint)] hover:bg-[var(--soft)] hover:text-[var(--ink)]">
-          <X size={15} />
+          <span className="ml-auto flex h-6 w-6 items-center justify-center text-[var(--faint)]"><ChevronDown size={16} /></span>
         </button>
       </div>
 
-      {open && (
+      {(
         <>
           {/* Tabs */}
           <div className="flex items-center gap-1 px-3 pb-2">
@@ -267,31 +328,30 @@ export function DownloadsDock() {
           </div>
 
           {/* Rows */}
-          <div className="max-h-[46vh] min-h-0 divide-y divide-[var(--line)] overflow-auto border-t border-[var(--line)]">
+          <div className="max-h-[70vh] min-h-[300px] divide-y divide-[var(--line)] overflow-auto border-t border-[var(--line)]">
             {empty ? (
-              <div className="px-4 py-6 text-center text-[12px] text-[var(--faint)]">Nothing here.</div>
+              <div className="px-4 py-8 text-center text-[12px] text-[var(--faint)]">
+                {dragActive ? "Drop a file or folder here to download it." : "Nothing here."}
+              </div>
             ) : (
               <>
                 {dlRows.map((j) => <Row key={`j${j.jobId}`} job={j} labelOf={labelOf} />)}
                 {ulRows.map((j) => <Row key={`u${j.jobId}`} job={j} labelOf={labelOf} />)}
                 {queueRows.map((q, i) => <QueueRow key={q.id} q={q} position={i + 1} labelOf={labelOf} />)}
-                {doneRows.map((j) => <Row key={`${j.kind}${j.jobId}`} job={j} labelOf={labelOf} />)}
+                {upDoneRows.map((j) => <Row key={`u${j.jobId}`} job={j} labelOf={labelOf} />)}
+                {historyRows.map((h) => <HistoryRow key={h.id ?? `${h.jobId}-${h.name}`} h={h} labelOf={labelOf} />)}
               </>
             )}
           </div>
         </>
       )}
 
-      {/* Footer: total progress while anything is in flight. */}
+      {/* Footer: compact summary only (per-row fill shows each transfer's
+          progress now — no separate bar). */}
       {activeCount > 0 && (
-        <div className="flex items-center gap-2.5 border-t border-[var(--line)] px-3.5 py-2">
-          <span className="shrink-0 text-[11px] font-medium text-[var(--mut)]">
-            {activeAll.length > 0 ? `${activeAll.length} transferring` : `${activeCount} queued`}
-          </span>
-          <div className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-[var(--soft)]">
-            <div className="h-full rounded-full bg-[var(--dl)] transition-[width]" style={{ width: `${totalPct}%` }} />
-          </div>
-          <span className="tnum shrink-0 text-[10.5px] text-[var(--faint)]">{totalSpeed > 0 ? formatSpeed(totalSpeed) : `${totalPct}%`}</span>
+        <div className="flex items-center justify-between border-t border-[var(--line)] px-4 py-2 text-[11px] font-medium text-[var(--mut)]">
+          <span>{activeAll.length > 0 ? `${activeAll.length} transferring` : `${activeCount} queued`}</span>
+          {totalSpeed > 0 && <span className="tnum text-[var(--faint)]">{formatSpeed(totalSpeed)}</span>}
         </div>
       )}
     </div>

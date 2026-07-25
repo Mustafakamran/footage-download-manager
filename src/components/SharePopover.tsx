@@ -1,18 +1,27 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Link2, Copy, Check, Loader2, X } from "lucide-react";
+import { Link2, Copy, Check, Loader2 } from "lucide-react";
 import { driveShareLink, dropboxShareLink, type Account } from "../lib/tauri/commands";
 import type { RcItem } from "../lib/rc/browse";
 
+const W = 320; // flyout width
+
 /**
- * Small "Copy link" popover (Dropbox-style): fetches or creates an
- * anyone-with-the-link share URL for a Drive/Dropbox item, shows it in a
- * selectable field with a Copy button. Drive shares by file id; Dropbox by path.
+ * "Copy link" flyout (Dropbox-style): an anchored morph popover — not a modal —
+ * that grows from the click point. Fetches/creates an anyone-with-the-link share
+ * URL for a Drive/Dropbox item and shows it with a Copy button. Drive shares by
+ * file id; Dropbox by path.
  */
-export function SharePopover({ account, item, onClose }: { account: Account; item: RcItem; onClose: () => void }) {
+export function SharePopover({
+  account, item, anchor, onClose,
+}: { account: Account; item: RcItem; anchor?: { x: number; y: number }; onClose: () => void }) {
+  // Defensive: fall back to screen centre if no anchor was supplied.
+  const a = anchor ?? { x: window.innerWidth / 2, y: window.innerHeight / 3 };
   const [url, setUrl] = useState<string | null>(null);
   const [err, setErr] = useState("");
   const [copied, setCopied] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ left: number; top: number; origin: string }>({ left: a.x, top: a.y, origin: "top left" });
 
   useEffect(() => {
     let alive = true;
@@ -23,16 +32,28 @@ export function SharePopover({ account, item, onClose }: { account: Account; ite
           : Promise.reject(new Error("This item has no Drive id to share."))
         : dropboxShareLink(account.id, item.Path);
     p.then((u) => alive && setUrl(u)).catch((e) => alive && setErr(e instanceof Error ? e.message : String(e)));
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, [account, item]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
+    document.addEventListener("scroll", onClose, true);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("scroll", onClose, true);
+    };
   }, [onClose]);
+
+  // Clamp inside the viewport; flip the growth origin when near an edge.
+  useLayoutEffect(() => {
+    const h = ref.current?.offsetHeight ?? 120;
+    const flipX = a.x + W + 12 > window.innerWidth;
+    const flipY = a.y + h + 12 > window.innerHeight;
+    const left = flipX ? Math.max(8, a.x - W) : a.x;
+    const top = flipY ? Math.max(8, a.y - h) : a.y;
+    setPos({ left, top, origin: `${flipY ? "bottom" : "top"} ${flipX ? "right" : "left"}` });
+  }, [a.x, a.y, url, err]);
 
   const copy = async () => {
     if (!url) return;
@@ -46,27 +67,25 @@ export function SharePopover({ account, item, onClose }: { account: Account; ite
   };
 
   return createPortal(
-    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 px-4" onMouseDown={onClose}>
+    <>
+      <div className="fixed inset-0 z-[200]" onMouseDown={onClose} />
       <div
-        className="animate-rise w-full max-w-[460px] rounded-[14px] border border-[var(--border-strong)] bg-[var(--surface)] p-5 shadow-[var(--shadow-lg)]"
+        ref={ref}
+        className="animate-pop fixed z-[201] rounded-[12px] border border-[var(--border-strong)] bg-[var(--surface)] p-3.5 shadow-[var(--shadow-lg)]"
+        style={{ left: pos.left, top: pos.top, width: W, transformOrigin: pos.origin }}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-2 text-[13px] font-semibold text-[var(--text)]">
-            <Link2 size={15} className="shrink-0 text-[var(--accent)]" />
-            <span className="shrink-0">Copy link to</span>
-            <span className="truncate font-normal text-[var(--text-2)]">{item.Name}</span>
-          </div>
-          <button onClick={onClose} aria-label="Close" className="shrink-0 text-[var(--text-3)] hover:text-[var(--text)]">
-            <X size={16} />
-          </button>
+        <div className="flex min-w-0 items-center gap-2 text-[12.5px] font-semibold text-[var(--text)]">
+          <Link2 size={14} className="shrink-0 text-[var(--accent)]" />
+          <span className="shrink-0">Copy link</span>
+          <span className="truncate font-normal text-[var(--text-3)]">· {item.Name}</span>
         </div>
 
-        <div className="mt-4">
+        <div className="mt-3">
           {err ? (
-            <p className="text-[12.5px] leading-relaxed text-[var(--error)]">{err}</p>
+            <p className="text-[12px] leading-relaxed text-[var(--error)]">{err}</p>
           ) : url == null ? (
-            <div className="flex items-center gap-2 py-1 text-[13px] text-[var(--text-2)]">
+            <div className="flex items-center gap-2 py-1 text-[12.5px] text-[var(--text-2)]">
               <Loader2 size={14} className="animate-spin" /> Creating link…
             </div>
           ) : (
@@ -75,11 +94,11 @@ export function SharePopover({ account, item, onClose }: { account: Account; ite
                 readOnly
                 value={url}
                 onFocus={(e) => e.currentTarget.select()}
-                className="min-w-0 flex-1 rounded-[9px] border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-[12.5px] text-[var(--text-2)] focus-accent"
+                className="min-w-0 flex-1 rounded-[8px] border border-[var(--border)] bg-[var(--card)] px-2.5 py-1.5 text-[12px] text-[var(--text-2)] focus-accent"
               />
               <button
                 onClick={copy}
-                className="flex shrink-0 items-center gap-1.5 rounded-[9px] bg-[var(--accent)] px-3 py-2 text-[12.5px] font-semibold text-[var(--accent-ink)] transition active:translate-y-px"
+                className="flex shrink-0 items-center gap-1.5 rounded-[8px] bg-[var(--accent)] px-2.5 py-1.5 text-[12px] font-semibold text-[var(--accent-ink)] transition active:translate-y-px"
               >
                 {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? "Copied" : "Copy"}
               </button>
@@ -87,9 +106,9 @@ export function SharePopover({ account, item, onClose }: { account: Account; ite
           )}
         </div>
 
-        {!err && <p className="mt-3 text-[11px] text-[var(--faint)]">Anyone with this link can view.</p>}
+        {!err && <p className="mt-2.5 text-[10.5px] text-[var(--faint)]">Anyone with this link can view.</p>}
       </div>
-    </div>,
+    </>,
     document.body,
   );
 }

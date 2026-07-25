@@ -44,11 +44,86 @@ const VIEW_KEY = "browse_view";
 const PREVIEW_KEY = "browse_preview";
 const EMPTY: RcItem[] = [];
 
-/** Name that fades out at the right edge when it overflows, instead of a hard
- *  "…" ellipsis. The mask only bites into text that actually reaches the last
- *  ~1.5rem, so short names show no fade. Both mask props for WKWebView. */
-const FADE_NAME =
-  "overflow-hidden whitespace-nowrap [mask-image:linear-gradient(to_right,#000_calc(100%-1.5rem),transparent)] [-webkit-mask-image:linear-gradient(to_right,#000_calc(100%-1.5rem),transparent)]";
+/** Replace the browser's default drag image (a snapshot of the whole row) with a
+ *  compact name pill, so an in-app drag shows just what's being moved. */
+function setDragGhost(e: React.DragEvent, name: string) {
+  const el = document.createElement("div");
+  el.textContent = name;
+  el.style.cssText =
+    "position:fixed;top:-1000px;left:-1000px;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" +
+    "padding:6px 12px;border-radius:9px;background:var(--card);border:1px solid var(--line2);" +
+    "font:600 12.5px -apple-system,system-ui,sans-serif;color:var(--ink);box-shadow:var(--shadow-lg);pointer-events:none;z-index:9999;";
+  document.body.appendChild(el);
+  try { e.dataTransfer.setDragImage(el, 14, 16); } catch { /* WKWebView may ignore */ }
+  setTimeout(() => el.remove(), 0);
+}
+
+/** Base clipping for a single-line name (no ellipsis). */
+const NAME_CLIP = "min-w-0 overflow-hidden whitespace-nowrap";
+/** Right-edge fade mask — applied ONLY when the name is actually clipped (see
+ *  useOverflowFade), so short names never fade. Both props for WKWebView. */
+const FADE_MASK =
+  "[mask-image:linear-gradient(to_right,#000_calc(100%-1.5rem),transparent)] [-webkit-mask-image:linear-gradient(to_right,#000_calc(100%-1.5rem),transparent)]";
+/** Columns view: content-sized names still want fade-on-overflow; the mask there
+ *  is harmless because the size meta sits in its own shrink-0 cell after it. */
+const FADE_NAME = `${NAME_CLIP} ${FADE_MASK}`;
+
+/** True while `ref`'s element is horizontally clipped (scrollWidth > clientWidth).
+ *  Lets a name fade only when it overflows, keeping the size/status badge right
+ *  next to the text otherwise. */
+function useOverflowFade<T extends HTMLElement>() {
+  const ref = useRef<T>(null);
+  const [over, setOver] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const check = () => setOver(el.scrollWidth - el.clientWidth > 1);
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, over] as const;
+}
+
+/**
+ * Where to place a row's hover actions, in three states (measured per row):
+ *  - "fixed"  — the name clears the reserved zone, so anchor the cluster at a
+ *               fixed ~64% centre (no shift row-to-row).
+ *  - "inline" — the name passes the fixed centre but there's still room on the
+ *               row after it: slide the cluster right, just past the name.
+ *  - "flyout" — no room left on the row (very long name / narrow list): lift the
+ *               cluster into a tab above the row.
+ * Returns the computed `left` (px, cell-relative) for inline/flyout.
+ */
+const ACTION_CENTER = 0.64;
+const ACTION_W = 156; // approx cluster width (widest: 6 file icons)
+function useActionMode(nameRef: React.RefObject<HTMLElement | null>, cellRef: React.RefObject<HTMLElement | null>) {
+  const [state, setState] = useState<{ mode: "fixed" | "inline" | "flyout"; left: number }>({ mode: "fixed", left: 0 });
+  useLayoutEffect(() => {
+    const name = nameRef.current, cell = cellRef.current;
+    if (!name || !cell) return;
+    const check = () => {
+      const cw = cell.clientWidth;
+      const nameRight = name.getBoundingClientRect().right - cell.getBoundingClientRect().left;
+      const center = ACTION_CENTER * cw;
+      const fixedLeft = center - ACTION_W / 2;
+      const PAD = 14, RPAD = 10;
+      if (nameRight + PAD <= fixedLeft) {
+        setState({ mode: "fixed", left: fixedLeft });
+      } else {
+        const left = nameRight + PAD;
+        if (left + ACTION_W <= cw - RPAD) setState({ mode: "inline", left });
+        else setState({ mode: "flyout", left: Math.max(RPAD, cw - ACTION_W - RPAD) });
+      }
+    };
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(cell);
+    return () => ro.disconnect();
+  }, [nameRef, cellRef]);
+  return state;
+}
 
 /** Explorer view mode — Finder-style columns, a flat list, or a grid of cards. */
 type ViewMode = "columns" | "list" | "grid";
@@ -154,7 +229,7 @@ interface RowActions {
   openReview: (item: RcItem) => void;
   download: (item: RcItem) => void;
   /** Open the copy/share-link popover for this item. */
-  share: (item: RcItem) => void;
+  share: (item: RcItem, anchor: { x: number; y: number }) => void;
   indexFolder: (p: string) => void;
   calcSize: (p: string) => void;
   toggleStar: (p: string) => void;
@@ -375,7 +450,7 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
   // Marquee (click-drag rubber-band) selection rectangle, in viewport coords.
   // `leaving` drives the macOS-style fade-out on release.
   const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number; leaving?: boolean } | null>(null);
-  const [share, setShare] = useState<RcItem | null>(null);
+  const [share, setShare] = useState<{ item: RcItem; anchor: { x: number; y: number } } | null>(null);
   const [moveItems, setMoveItems] = useState<RcItem[] | null>(null);
   const [newFolder, setNewFolder] = useState<string | null>(null);
   const [creatingFolder, setCreatingFolder] = useState(false);
@@ -472,8 +547,9 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
         setMarquee(null);
       }
       document.body.style.userSelect = prevUserSelect;
-      // A plain click on empty space (no drag) clears the selection.
-      if (!moved && !additive) useSelection.getState().clearAccount(account.id);
+      // A plain click on empty space (no drag) clears the selection AND the
+      // focus, so the preview panel falls back to the current folder.
+      if (!moved && !additive) { useSelection.getState().clearAccount(account.id); setFocused(null); }
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
@@ -830,10 +906,20 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
           }
           if (pl.type === "drop") {
             if (inApp) {
-              const tgt = moveTargetRef.current;
-              if (tgt !== null) void performMoveToPath(tgt, false);
+              const dragged = draggedRef.current;
+              // Dropped on the Transfers drawer → download it (like Download).
+              const dpr = window.devicePixelRatio || 1;
+              const dx = pl.position.x > window.innerWidth ? pl.position.x / dpr : pl.position.x;
+              const dy = pl.position.y > window.innerHeight ? pl.position.y / dpr : pl.position.y;
+              const onDrawer = (document.elementFromPoint(dx, dy) as HTMLElement | null)?.closest("[data-transfer-drop]");
+              if (onDrawer && dragged) {
+                void enqueueItems([dragged]);
+              } else if (moveTargetRef.current !== null) {
+                void performMoveToPath(moveTargetRef.current, false);
+              }
               inAppDragRef.current = false; draggedRef.current = null;
               moveTargetRef.current = null; setMoveOver(null);
+              useTransfers.getState().setDragActive(false);
               return;
             }
             const tgt = dropTargetRef.current;
@@ -910,14 +996,14 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
     openPreview: (item) => usePreview.getState().open(account.id, reviewTarget(item)),
     openReview: (item) => openReview(account.id, reviewTarget(item)),
     download: (item) => void enqueueItems([item]),
-    share: (item) => setShare(item),
+    share: (item, anchor) => setShare({ item, anchor }),
     indexFolder,
     calcSize,
     toggleStar: (p) => toggleStar(account.id, p),
     deleteOne: (item) => setPendingDelete([item]),
     contextMenu: (x, y, item) => setMenu({ x, y, item }),
-    dragStart: (item) => { draggedRef.current = item; inAppDragRef.current = true; },
-    dragEnd: () => { draggedRef.current = null; inAppDragRef.current = false; setMoveOver(null); },
+    dragStart: (item) => { draggedRef.current = item; inAppDragRef.current = true; useTransfers.getState().setDragActive(true); },
+    dragEnd: () => { draggedRef.current = null; inAppDragRef.current = false; setMoveOver(null); useTransfers.getState().setDragActive(false); },
     dragOverFolder: (folder) => {
       if (!canDropOn(folder)) return false;
       if (moveOver !== folder.Path) setMoveOver(folder.Path);
@@ -933,7 +1019,7 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
     openPreview: (item) => actionsRef.current.openPreview(item),
     openReview: (item) => actionsRef.current.openReview(item),
     download: (item) => actionsRef.current.download(item),
-    share: (item) => actionsRef.current.share(item),
+    share: (item, anchor) => actionsRef.current.share(item, anchor),
     indexFolder: (p) => actionsRef.current.indexFolder(p),
     calcSize: (p) => actionsRef.current.calcSize(p),
     toggleStar: (p) => actionsRef.current.toggleStar(p),
@@ -974,7 +1060,7 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
     out.push({ label: "Download", icon: Download, onClick: () => void enqueueItems([item]) });
     out.push({ label: isStar ? "Unstar" : "Star", icon: Star, onClick: () => toggleStar(account.id, item.Path) });
     if (canUpload) out.push({ label: "Move to…", icon: FolderInput, separator: true, onClick: () => setMoveItems(selected.has(item.Path) && selected.size > 1 ? items.filter((i) => selected.has(i.Path)) : [item]) });
-    out.push({ label: "Copy link", icon: Link2, separator: !canUpload, onClick: () => setShare(item) });
+    out.push({ label: "Copy link", icon: Link2, separator: !canUpload, onClick: () => setShare({ item, anchor: { x: menu?.x ?? window.innerWidth / 2, y: menu?.y ?? window.innerHeight / 2 } }) });
     out.push({ label: "Copy name", icon: Copy, onClick: () => void navigator.clipboard?.writeText(item.Name) });
     out.push({ label: "Delete", icon: Trash2, danger: true, separator: true, onClick: () => setPendingDelete([item]) });
     return out;
@@ -1517,7 +1603,7 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
       {/* Right-click context menu (an item, or the empty background) */}
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.item)} onClose={() => setMenu(null)} />}
       {bgMenu && <ContextMenu x={bgMenu.x} y={bgMenu.y} items={bgMenuItems()} onClose={() => setBgMenu(null)} />}
-      {share && <SharePopover account={account} item={share} onClose={() => setShare(null)} />}
+      {share && <SharePopover account={account} item={share.item} anchor={share.anchor} onClose={() => setShare(null)} />}
       {moveItems && moveItems.length > 0 && <MoveDialog account={account} items={moveItems} onClose={() => setMoveItems(null)} onMoved={() => setMoveItems(null)} />}
     </div>
   );
@@ -1535,7 +1621,7 @@ function RowAction({
   green,
   children,
 }: {
-  onClick: () => void;
+  onClick: (e: React.MouseEvent) => void;
   disabled?: boolean;
   tip: string;
   label: string;
@@ -1610,6 +1696,9 @@ const FileRow = memo(function FileRow({
     : `${ext || "FILE"}${item.Size > 0 ? ` · ${formatBytes(item.Size)}` : ""}`;
   const video = !item.IsDir && isVideo(item.Name);
   const previewableFlag = !item.IsDir && isPreviewable(item.Name);
+  const [nameRef, nameOver] = useOverflowFade<HTMLSpanElement>();
+  const cellRef = useRef<HTMLTableCellElement>(null);
+  const action = useActionMode(nameRef, cellRef);
 
   const tile = item.IsDir ? (
     <span className="relative flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-[11px] bg-[var(--accw)]">
@@ -1625,39 +1714,48 @@ const FileRow = memo(function FileRow({
     <>
       {tile}
       <span className="min-w-0 flex-1">
-        <span className="flex items-center gap-1.5">
-          <span className={`min-w-0 flex-1 text-[13.5px] font-medium text-[var(--ink)] ${FADE_NAME}`}>{item.Name}</span>
-          {dl ? <DownloadBadge status={dl} /> : status ? <StatusBadge status={status} /> : null}
+        <span className="flex w-full min-w-0 items-center gap-1.5">
+          <span ref={nameRef} className={`${NAME_CLIP} text-[13.5px] font-medium text-[var(--ink)] ${nameOver ? FADE_MASK : ""}`}>{item.Name}</span>
           {isStarred && <Star size={11} fill="currentColor" className="shrink-0 text-[var(--warn)]" />}
           {video && <Play size={11} className="shrink-0 text-[var(--faint)] opacity-0 group-hover:opacity-100" />}
         </span>
-        {sub && <span className="block truncate text-[11.5px] text-[var(--faint)]">{sub}</span>}
+        {/* Status/download badge sits on the sub-line (with the size/count) so it
+            never collides with the fixed hover actions in the Name column. */}
+        {(dl || status || sub) && (
+          <span className="mt-0.5 flex items-center gap-1.5">
+            {dl ? <DownloadBadge status={dl} /> : status ? <StatusBadge status={status} /> : null}
+            {sub && <span className="min-w-0 truncate text-[11.5px] text-[var(--faint)]">{sub}</span>}
+          </span>
+        )}
       </span>
     </>
   );
-  const nameCell = item.IsDir ? (
-    <button className="flex min-w-0 flex-1 items-center gap-3 text-left" onClick={(e) => (e.shiftKey ? actions.toggle(item.Path, true) : actions.openDir(item))}>{body}</button>
-  ) : (
-    <button
-      className="flex min-w-0 flex-1 items-center gap-3 text-left"
-      onClick={(e) => (e.shiftKey ? actions.toggle(item.Path, true) : actions.focus(item))}
-      onDoubleClick={() => previewableFlag && actions.openPreview(item)}
-    >{body}</button>
-  );
-  const tabBg = isSelected || isDropTarget ? "var(--accw)" : "var(--hover)";
-
+  const nameCell = <span className="flex min-w-0 items-center gap-3 text-left">{body}</span>;
+  // Clicking anywhere on the row (not an interactive child) acts like clicking
+  // the name: open a folder, focus a file (double-click previews it).
+  const primaryClick = (e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest("button,input,a,[data-rowbtn]")) return;
+    if (e.shiftKey) { actions.toggle(item.Path, true); return; }
+    if (item.IsDir) actions.openDir(item); else actions.focus(item);
+  };
+  const primaryDouble = (e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest("button,input,a,[data-rowbtn]")) return;
+    if (!item.IsDir && previewableFlag) actions.openPreview(item);
+  };
   return (
     <tr
       data-row
       data-path={item.Path}
       data-folder-path={item.IsDir ? item.Path : undefined}
       draggable
-      onDragStart={(e) => { e.dataTransfer.effectAllowed = "copyMove"; actions.dragStart(item); }}
+      onClick={primaryClick}
+      onDoubleClick={primaryDouble}
+      onDragStart={(e) => { e.dataTransfer.effectAllowed = "copyMove"; setDragGhost(e, item.Name); actions.dragStart(item); }}
       onDragEnd={() => actions.dragEnd()}
       onDragOver={item.IsDir ? (e) => { if (actions.dragOverFolder(item)) { e.preventDefault(); e.dataTransfer.dropEffect = e.altKey ? "copy" : "move"; } } : undefined}
       onDrop={item.IsDir ? (e) => { e.preventDefault(); actions.drop(item, e.altKey); } : undefined}
       onContextMenu={(e) => { e.preventDefault(); actions.contextMenu(e.clientX, e.clientY, item); }}
-      className={`group border-b border-[var(--border)]/60 transition-colors duration-100 ${isDropTarget ? "bg-[var(--accw)] outline-dashed outline-1 -outline-offset-1 outline-[var(--acc)]" : isSelected ? "bg-[var(--accw)]" : blink ? "animate-flash" : "hover:bg-[var(--hover)]"}`}
+      className={`group cursor-pointer select-none border-b border-[var(--border)]/60 transition-colors duration-100 active:bg-[var(--accw)] ${isDropTarget ? "bg-[var(--accw)] outline-dashed outline-1 -outline-offset-1 outline-[var(--acc)]" : isSelected ? "bg-[var(--accw)]" : blink ? "animate-flash" : "hover:bg-[var(--hover)]"}`}
     >
       <td className="w-9 py-2.5 pl-1">
         <input
@@ -1665,29 +1763,31 @@ const FileRow = memo(function FileRow({
           aria-label={`Select ${item.Name}`}
           checked={isSelected}
           onChange={() => {}}
-          onClick={(e) => actions.toggle(item.Path, e.shiftKey)}
+          onClick={(e) => { actions.toggle(item.Path, e.shiftKey); actions.focus(item); }}
         />
       </td>
-      <td className="relative min-w-0 py-1.5 pr-3">
+      <td ref={cellRef} className="relative min-w-0 py-1.5 pr-3">
         <div className="flex min-w-0 items-center gap-3">
           {nameCell}
-          {/* Actions on hover, chosen by the LIST's own width (container query,
-              so the preview panel eating space flips it too — not the viewport).
-              Wide enough: inline at the row's right on the same line. Narrow: a
-              static flyout tab above the row's right edge (merged hover bg +
-              fillets) so the name keeps its width. */}
-          <div className="hidden shrink-0 items-center gap-0.5 @2xl:group-hover:flex">
-            <ActionButtons />
-          </div>
-          <div
-            className="absolute bottom-full right-2 z-20 hidden items-center gap-0.5 whitespace-nowrap rounded-t-[9px] px-1.5 pb-1.5 pt-1 group-hover:flex @2xl:!hidden"
-            style={{ background: tabBg }}
-          >
-            <span aria-hidden className="pointer-events-none absolute bottom-0 left-[-10px] h-2.5 w-2.5" style={{ background: `radial-gradient(circle 10px at 0 0, transparent 10px, ${tabBg} 10px)` }} />
-            <span aria-hidden className="pointer-events-none absolute bottom-0 right-[-10px] h-2.5 w-2.5" style={{ background: `radial-gradient(circle 10px at 100% 0, transparent 10px, ${tabBg} 10px)` }} />
-            <ActionButtons />
-          </div>
         </div>
+        {/* Hover actions — 3 states from useActionMode (fixed / inline-shift /
+            flyout). All share the same measured horizontal `left`; flyout lifts
+            above the row with a merged tab background. */}
+        {action.mode === "flyout" ? (
+          <div
+            className="absolute bottom-full z-20 hidden items-center gap-0.5 whitespace-nowrap rounded-t-[9px] px-1.5 pb-1.5 pt-1 group-hover:flex"
+            style={{ left: action.left, background: isSelected || isDropTarget ? "var(--accw)" : "var(--hover)" }}
+          >
+            <ActionButtons />
+          </div>
+        ) : (
+          <div
+            className="absolute top-1/2 z-10 hidden -translate-y-1/2 items-center gap-0.5 group-hover:flex"
+            style={{ left: action.left }}
+          >
+            <ActionButtons />
+          </div>
+        )}
       </td>
       <td className="hidden whitespace-nowrap py-2 text-[var(--text-3)] lg:table-cell">{dateStr}</td>
       <td className="tnum whitespace-nowrap py-2 text-right text-[var(--text-2)]">
@@ -1713,7 +1813,7 @@ const FileRow = memo(function FileRow({
             <RowAction onClick={() => actions.download(item)} tip="Download" label={`Download ${item.Name}`} green>
               <Download size={14} />
             </RowAction>
-            <RowAction onClick={() => actions.share(item)} tip="Copy link" label={`Copy link to ${item.Name}`}>
+            <RowAction onClick={(e) => actions.share(item, { x: e.clientX, y: e.clientY })} tip="Copy link" label={`Copy link to ${item.Name}`}>
               <Link2 size={14} />
             </RowAction>
             {item.IsDir && (
@@ -1799,20 +1899,20 @@ const FileGridItem = memo(function FileGridItem({
       data-path={item.Path}
       data-folder-path={item.IsDir ? item.Path : undefined}
       draggable
-      onDragStart={(e) => { e.dataTransfer.effectAllowed = "copyMove"; actions.dragStart(item); }}
+      onDragStart={(e) => { e.dataTransfer.effectAllowed = "copyMove"; setDragGhost(e, item.Name); actions.dragStart(item); }}
       onDragEnd={() => actions.dragEnd()}
       onDragOver={item.IsDir ? (e) => { if (actions.dragOverFolder(item)) { e.preventDefault(); e.dataTransfer.dropEffect = e.altKey ? "copy" : "move"; } } : undefined}
       onDrop={item.IsDir ? (e) => { e.preventDefault(); actions.drop(item, e.altKey); } : undefined}
       onContextMenu={(e) => { e.preventDefault(); actions.contextMenu(e.clientX, e.clientY, item); }}
       style={{ animationDelay: `${Math.min(gridIndex, 16) * 22}ms` }}
-      className={`animate-item group relative flex flex-col items-center rounded-[12px] px-1 pb-2.5 pt-3 transition-colors duration-100 ${isDropTarget ? "bg-[var(--accw)] outline-dashed outline-1 -outline-offset-1 outline-[var(--acc)]" : blink ? "animate-flash" : ""}`}
+      className={`animate-item group relative flex select-none flex-col items-center rounded-[12px] px-1 pb-2.5 pt-3 transition-colors duration-100 ${isDropTarget ? "bg-[var(--accw)] outline-dashed outline-1 -outline-offset-1 outline-[var(--acc)]" : blink ? "animate-flash" : ""}`}
     >
       <input
         type="checkbox"
         aria-label={`Select ${item.Name}`}
         checked={isSelected}
         onChange={() => {}}
-        onClick={(e) => actions.toggle(item.Path, e.shiftKey)}
+        onClick={(e) => { actions.toggle(item.Path, e.shiftKey); actions.focus(item); }}
         className={`absolute left-2 top-2 z-10 transition-opacity ${isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
       />
       <button
@@ -1928,7 +2028,7 @@ function PreviewPanel({
               <Star size={13} fill={isStarred ? "currentColor" : "none"} className={isStarred ? "text-[var(--warn)]" : ""} /> Star
             </button>
           </div>
-          <button onClick={() => actions.share(item)} className="flex items-center justify-center gap-1.5 rounded-[11px] border border-[var(--line2)] py-2 text-[12px] font-semibold text-[var(--mut)] hover:text-[var(--ink)]">
+          <button onClick={(e) => actions.share(item, { x: e.clientX, y: e.clientY })} className="flex items-center justify-center gap-1.5 rounded-[11px] border border-[var(--line2)] py-2 text-[12px] font-semibold text-[var(--mut)] hover:text-[var(--ink)]">
             <Link2 size={13} /> Copy link
           </button>
         </div>
@@ -2073,18 +2173,18 @@ function ColumnsView({
                     data-path={it.Path}
                     data-folder-path={it.IsDir ? it.Path : undefined}
                     draggable
-                    onDragStart={(e) => { e.dataTransfer.effectAllowed = "copyMove"; actions.dragStart(it); }}
+                    onDragStart={(e) => { e.dataTransfer.effectAllowed = "copyMove"; setDragGhost(e, it.Name); actions.dragStart(it); }}
                     onDragEnd={() => actions.dragEnd()}
                     onDragOver={it.IsDir ? (e) => { if (actions.dragOverFolder(it)) { e.preventDefault(); e.dataTransfer.dropEffect = e.altKey ? "copy" : "move"; } } : undefined}
                     onDrop={it.IsDir ? (e) => { e.preventDefault(); actions.drop(it, e.altKey); } : undefined}
                     onClick={(e) => (e.shiftKey ? actions.toggle(it.Path, true, list) : it.IsDir ? actions.openDir(it) : actions.focus(it))}
                     onDoubleClick={() => !it.IsDir && isPreviewable(it.Name) && actions.openPreview(it)}
                     onContextMenu={(e) => { e.preventDefault(); actions.contextMenu(e.clientX, e.clientY, it); }}
-                    className={`group flex cursor-pointer items-center gap-2 rounded-[8px] px-2 py-1.5 ${it.Path === dropTarget ? "bg-[var(--accw)] outline-dashed outline-1 outline-[var(--acc)]" : hi ? "bg-[var(--accw)]" : "hover:bg-[var(--soft)]"}`}
+                    className={`group flex cursor-pointer select-none items-center gap-2 rounded-[8px] px-2 py-1.5 ${it.Path === dropTarget ? "bg-[var(--accw)] outline-dashed outline-1 outline-[var(--acc)]" : hi ? "bg-[var(--accw)]" : "hover:bg-[var(--soft)]"}`}
                   >
                     {/* Selection tick — folders too. Shift ranges within this column. */}
                     <button
-                      onClick={(e) => { e.stopPropagation(); actions.toggle(it.Path, e.shiftKey, list); }}
+                      onClick={(e) => { e.stopPropagation(); actions.toggle(it.Path, e.shiftKey, list); actions.focus(it); }}
                       aria-label={`Select ${it.Name}`}
                       className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border ${checked ? "border-[var(--acc)] bg-[var(--acc)]" : "border-[var(--line2)] opacity-0 group-hover:opacity-100"}`}
                     >

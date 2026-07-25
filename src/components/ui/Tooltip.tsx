@@ -65,7 +65,11 @@ export function TooltipLayer() {
       if (!found) return;
       clear();
       timer.current = setTimeout(() => {
+        // The anchor may have unmounted (or be mid-morph) during the delay —
+        // don't show a stale tooltip at a bogus position.
+        if (!found.el.isConnected) return;
         const rect = found.el.getBoundingClientRect();
+        if (rect.width === 0 && rect.height === 0) return;
         // Prefer above; flip below when there isn't room.
         const side: TipAnchor["side"] = rect.top > 56 ? "top" : "bottom";
         setTip({ text: found.text, rect, side });

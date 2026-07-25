@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { FolderOpen, Check, RefreshCw, Download, Loader2, Layers, Copy, Puzzle, Sun, Moon, Palette, FolderTree, Power, Rocket } from "lucide-react";
+import { FolderOpen, Check, RefreshCw, Download, Loader2, Layers, Copy, Puzzle, Sun, Moon, Palette, FolderTree, Power, Rocket, ArrowDownUp } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getVersion } from "@tauri-apps/api/app";
 import { enable as autostartEnable, disable as autostartDisable, isEnabled as autostartIsEnabled } from "@tauri-apps/plugin-autostart";
@@ -248,6 +248,8 @@ export function SettingsView() {
           </Card>
 
           <IndexingCard />
+
+          <TransferDrawerCard />
 
           <StartupCard />
 
@@ -581,6 +583,29 @@ function IndexingCard() {
         <span className="text-sm text-[var(--text-2)]">
           {autoIndex ? "On — sizes and file counts show automatically" : "Off — size folders on demand"}
         </span>
+      </button>
+    </Card>
+  );
+}
+
+/** Toggle the floating Transfers drawer (collapses to a circular button). */
+function TransferDrawerCard() {
+  const show = useSettings((s) => s.showTransferDrawer);
+  const setShow = useSettings((s) => s.setShowTransferDrawer);
+  return (
+    <Card className="p-5">
+      <h2 className="mb-1 flex items-center gap-2 text-sm font-semibold text-[var(--text)]">
+        <ArrowDownUp size={16} /> Transfers drawer
+      </h2>
+      <p className="mb-4 text-xs text-[var(--text-3)]">
+        A persistent floating panel showing active/queued/finished transfers. It collapses
+        to a circular button in the bottom-right; drag a file or folder onto it to download.
+      </p>
+      <button onClick={() => setShow(!show)} role="switch" aria-checked={show} className="flex items-center gap-3 text-left">
+        <span className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${show ? "bg-[var(--acc)]" : "bg-[var(--surface)] border border-[var(--border)]"}`}>
+          <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-[var(--shadow-sm)] transition-transform ${show ? "translate-x-[22px]" : "translate-x-0.5"}`} />
+        </span>
+        <span className="text-sm text-[var(--text-2)]">{show ? "On — drawer / button shown" : "Off — hidden"}</span>
       </button>
     </Card>
   );
