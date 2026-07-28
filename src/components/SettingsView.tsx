@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { FolderOpen, Check, RefreshCw, Download, Loader2, Layers, Copy, Puzzle, Sun, Moon, Palette, FolderTree, Power, Rocket, ArrowDownUp } from "lucide-react";
+import { FolderOpen, Check, RefreshCw, Download, Loader2, Layers, Copy, Puzzle, Sun, Moon, Palette, FolderTree, Power, Rocket, ArrowDownUp, Cloud, HardDrive, type LucideIcon } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getVersion } from "@tauri-apps/api/app";
 import { enable as autostartEnable, disable as autostartDisable, isEnabled as autostartIsEnabled } from "@tauri-apps/plugin-autostart";
@@ -36,18 +36,38 @@ const ACCENT_LABEL: Record<Accent, string> = {
 /** Fixed loopback port the ingest server binds (shared with the extension). */
 const INGEST_PORT = 53713;
 
-type Tab = "general" | "extension" | "google" | "dropbox" | "sync" | "updates";
-const TABS: { key: Tab; label: string }[] = [
-  { key: "general", label: "General" },
-  { key: "extension", label: "Browser extension" },
-  { key: "google", label: "Google Drive" },
-  { key: "dropbox", label: "Dropbox" },
-  { key: "sync", label: "Sync (BDM)" },
-  { key: "updates", label: "Updates" },
+type Tab = "appearance" | "downloads" | "transfers" | "indexing" | "startup" | "extension" | "google" | "dropbox" | "sync" | "updates";
+/** Left-nav sections, grouped like the Claude desktop settings. */
+const NAV: { group: string; items: { key: Tab; label: string; icon: LucideIcon }[] }[] = [
+  {
+    group: "General",
+    items: [
+      { key: "appearance", label: "Appearance", icon: Palette },
+      { key: "downloads", label: "Downloads", icon: Download },
+      { key: "transfers", label: "Transfers", icon: ArrowDownUp },
+      { key: "indexing", label: "Indexing", icon: FolderTree },
+      { key: "startup", label: "Startup", icon: Power },
+    ],
+  },
+  {
+    group: "Accounts",
+    items: [
+      { key: "google", label: "Google Drive", icon: HardDrive },
+      { key: "dropbox", label: "Dropbox", icon: Cloud },
+    ],
+  },
+  {
+    group: "Advanced",
+    items: [
+      { key: "extension", label: "Browser extension", icon: Puzzle },
+      { key: "sync", label: "Sync (BDM)", icon: RefreshCw },
+      { key: "updates", label: "Updates", icon: RefreshCw },
+    ],
+  },
 ];
 
 export function SettingsView() {
-  const [tab, setTab] = useState<Tab>("general");
+  const [tab, setTab] = useState<Tab>("appearance");
   const theme = useTheme((s) => s.theme);
   const setTheme = useTheme((s) => s.setTheme);
   const accent = useTheme((s) => s.accent);
@@ -187,28 +207,35 @@ export function SettingsView() {
       </span>
     ) : null;
 
+  const activeLabel = NAV.flatMap((g) => g.items).find((i) => i.key === tab)?.label ?? "Settings";
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-col p-6">
-      <h1 className="mb-4 text-lg font-semibold text-[var(--text)]">Settings</h1>
-
-      {/* Tabs */}
-      <div className="mb-5 flex gap-1 border-b border-[var(--border)]">
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key)}
-            className={`-mb-px border-b-2 px-3 py-2 text-sm ${
-              tab === t.key
-                ? "border-[var(--accent)] font-medium text-[var(--text)]"
-                : "border-transparent text-[var(--text-2)] hover:text-[var(--text)]"
-            }`}
-          >
-            {t.label}
-          </button>
+    <div className="flex h-[70vh] max-h-[660px] min-h-[440px]">
+      {/* Left nav — grouped sections (Claude-desktop style). */}
+      <nav className="w-[208px] shrink-0 overflow-y-auto border-r border-[var(--border)] bg-[var(--surface)] px-3 py-4">
+        {NAV.map((grp) => (
+          <div key={grp.group} className="mb-4">
+            <div className="px-2 pb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-[var(--text-3)]">{grp.group}</div>
+            {grp.items.map((it) => {
+              const on = tab === it.key;
+              return (
+                <button
+                  key={it.key}
+                  onClick={() => setTab(it.key)}
+                  className={`flex w-full items-center gap-2.5 rounded-[8px] px-2 py-[7px] text-left text-[13px] transition-colors ${on ? "bg-[var(--card)] font-medium text-[var(--text)] shadow-[var(--shadow-sm)]" : "text-[var(--text-2)] hover:bg-[var(--hover)] hover:text-[var(--text)]"}`}
+                >
+                  <it.icon size={15} className={on ? "text-[var(--acc)]" : "text-[var(--text-3)]"} /> {it.label}
+                </button>
+              );
+            })}
+          </div>
         ))}
-      </div>
+      </nav>
 
-      {tab === "general" && (
+      {/* Right pane — the active section's content. */}
+      <div className="min-w-0 flex-1 overflow-y-auto px-6 py-5">
+        <h1 className="mb-4 text-[15px] font-semibold text-[var(--text)]">{activeLabel}</h1>
+
+      {tab === "appearance" && (
         <div className="flex flex-col gap-4">
           <Card className="p-5">
             <h2 className="mb-1 flex items-center gap-2 text-sm font-semibold text-[var(--text)]">
@@ -246,13 +273,15 @@ export function SettingsView() {
               ))}
             </div>
           </Card>
+        </div>
+      )}
 
-          <IndexingCard />
+      {tab === "indexing" && <div className="flex flex-col gap-4"><IndexingCard /></div>}
+      {tab === "transfers" && <div className="flex flex-col gap-4"><TransferDrawerCard /></div>}
+      {tab === "startup" && <div className="flex flex-col gap-4"><StartupCard /></div>}
 
-          <TransferDrawerCard />
-
-          <StartupCard />
-
+      {tab === "downloads" && (
+        <div className="flex flex-col gap-4">
           <Card className="p-5">
             <h2 className="mb-1 text-sm font-semibold text-[var(--text)]">Default download folder</h2>
             <p className="mb-4 text-xs text-[var(--text-3)]">
@@ -307,6 +336,21 @@ export function SettingsView() {
                 value={dl.bwLimitMbps}
                 onChange={(e) => setDlField("bwLimitMbps", Number(e.target.value))}
               />
+            </div>
+          </Card>
+
+          <Card className="p-5">
+            <h2 className="mb-1 text-sm font-semibold text-[var(--text)]">Ask where to save</h2>
+            <p className="mb-4 text-xs text-[var(--text-3)]">
+              When on, a captured download opens a save dialog so you can pick the folder and name (seeded with the
+              suggested filename). When off, captures drop straight into your default download folder.
+            </p>
+            <div className="flex items-center justify-between gap-3">
+              <label className="flex items-center gap-2 text-sm text-[var(--text)]" title="Ask where to save">
+                <input type="checkbox" checked={askWhere} onChange={(e) => toggleAskWhere(e.target.checked)} />
+                Ask where to save (browser downloads)
+              </label>
+              {tick("askwhere")}
             </div>
           </Card>
         </div>
@@ -387,27 +431,6 @@ export function SettingsView() {
             </ol>
           </Card>
 
-          <Card className="p-5">
-            <h2 className="mb-1 text-sm font-semibold text-[var(--text)]">Ask where to save</h2>
-            <p className="mb-4 text-xs text-[var(--text-3)]">
-              When on, a captured download opens a save dialog so you can pick the folder and name (seeded with the
-              suggested filename). When off, captures drop straight into your default download folder.
-            </p>
-            <div className="flex items-center justify-between gap-3">
-              <label
-                className="flex items-center gap-2 text-sm text-[var(--text)]"
-                title="Ask where to save"
-              >
-                <input
-                  type="checkbox"
-                  checked={askWhere}
-                  onChange={(e) => toggleAskWhere(e.target.checked)}
-                />
-                Ask where to save (browser downloads)
-              </label>
-              {tick("askwhere")}
-            </div>
-          </Card>
         </div>
       )}
 
@@ -546,6 +569,7 @@ export function SettingsView() {
           </div>
         </Card>
       )}
+      </div>
     </div>
   );
 }

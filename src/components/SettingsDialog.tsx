@@ -24,14 +24,14 @@ export function SettingsDialog() {
       aria-label="Settings"
     >
       <div
-        className="animate-rise relative my-auto max-h-[88vh] w-full max-w-2xl overflow-auto rounded-[14px] border border-[var(--border-strong)] bg-[var(--surface)] shadow-[var(--shadow-lg)]"
+        className="animate-rise relative my-auto w-full max-w-3xl overflow-hidden rounded-[14px] border border-[var(--border-strong)] bg-[var(--card)] shadow-[var(--shadow-lg)]"
         onClick={(e) => e.stopPropagation()}
       >
         <button
           onClick={closeSettings}
           aria-label="Close settings"
           data-tip="Close (Esc)"
-          className="absolute right-4 top-5 z-10 flex h-8 w-8 items-center justify-center rounded-full text-[var(--text-3)] hover:bg-[var(--hover)] hover:text-[var(--text)]"
+          className="absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-full text-[var(--text-3)] hover:bg-[var(--hover)] hover:text-[var(--text)]"
         >
           <X size={16} />
         </button>

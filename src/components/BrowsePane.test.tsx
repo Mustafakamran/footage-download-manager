@@ -80,7 +80,9 @@ describe("BrowsePane", () => {
     render(<BrowsePane account={account} section="all" path="" />);
     await screen.findByTestId("file-list");
     fireEvent.click(screen.getByLabelText("Select a.mxf"));
-    fireEvent.click(screen.getByText("Download"));
+    // Click the Download in the selection pill (the preview panel also has one).
+    const pill = screen.getByText(/\bselected\b/).closest("div")!;
+    fireEvent.click(within(pill).getByText("Download"));
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith(
         "start_download",
