@@ -23,10 +23,15 @@ fn client() -> reqwest::blocking::Client {
         .unwrap_or_default()
 }
 
-/// (transfer_id, security_hash) from a canonical wetransfer.com/downloads URL.
+/// (transfer_id, security_hash) from a canonical WeTransfer share URL. Both the
+/// `/downloads/<id>/<hash>` and the `/previews/<id>/<hash>` forms carry the same
+/// transfer id + security hash (verified against the web app's prepare-download
+/// call), so accept either — a preview link downloads exactly like a normal one.
 fn parse_canonical(url: &str) -> Option<(String, String)> {
-    let i = url.find("/downloads/")?;
-    let rest = &url[i + "/downloads/".len()..];
+    let (marker, i) = ["/downloads/", "/previews/"]
+        .iter()
+        .find_map(|m| url.find(m).map(|i| (*m, i)))?;
+    let rest = &url[i + marker.len()..];
     let rest = rest.split(['?', '#']).next().unwrap_or(rest); // drop query/fragment
     let segs: Vec<&str> = rest.split('/').filter(|s| !s.is_empty()).collect();
     if segs.len() < 2 {
@@ -206,6 +211,11 @@ mod tests {
         assert_eq!(
             parse_canonical("https://wetransfer.com/downloads/abcdef0123456789abcd/recipient@x/0123456789"),
             Some(("abcdef0123456789abcd".into(), "0123456789".into()))
+        );
+        // Preview links carry the same id + hash and must parse too.
+        assert_eq!(
+            parse_canonical("https://wetransfer.com/previews/4f8bfb646602903215a28a694f4fc14d20260727054927/e697cf"),
+            Some(("4f8bfb646602903215a28a694f4fc14d20260727054927".into(), "e697cf".into()))
         );
         assert_eq!(parse_canonical("https://we.tl/t-xyz"), None);
     }
