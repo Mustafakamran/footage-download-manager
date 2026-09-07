@@ -3,7 +3,7 @@
 // table can list every transfer regardless of state (like a torrent client).
 
 import type { JobStatus, DownloadItem } from "../../lib/tauri/commands";
-import type { QueueItem } from "../../store/transfers";
+import type { QueueItem, BlockKind } from "../../store/transfers";
 import type { HistoryEntry } from "../../store/history";
 import { laneOf } from "../../lib/lane";
 
@@ -13,6 +13,7 @@ export type TransferState =
   | "queued"
   | "paused"
   | "gated"
+  | "blocked"
   | "completed"
   | "failed"
   | "cancelled";
@@ -39,6 +40,10 @@ export interface TransferRow {
   /** Account display label (shown in the info panel alongside the source path). */
   account: string;
   error?: string;
+  /** Recoverable-failure class on a blocked row (drives the fix hint). */
+  blockedKind?: BlockKind;
+  /** A blocked transfer scheduled for automatic retry (transient failures). */
+  autoRetry?: boolean;
   /** Finished-at timestamp (history rows). */
   at?: number;
   /** Present on failed rows so the panel/actions can re-enqueue. */
@@ -106,12 +111,15 @@ export function queueRow(q: QueueItem, position: number, labelOf: LabelOf): Tran
     speed: 0,
     eta: null,
     pct: q.item.size ? jobPct(q.resumedBytes ?? 0, q.item.size) : 0,
-    state: gated ? "gated" : q.paused ? "paused" : "queued",
+    state: q.blocked ? "blocked" : gated ? "gated" : q.paused ? "paused" : "queued",
     accountId: q.accountId,
     dest: q.dest,
     source: sourceLabel(q.accountId, q.item, labelOf),
     account: `${labelOf(q.accountId)} · #${position}`,
     item: q.item,
+    error: q.blockedError,
+    blockedKind: q.blockedKind,
+    autoRetry: !!q.nextRetryAt,
   };
 }
 

@@ -148,6 +148,43 @@ export interface QueueItem {
    * user-paused one never does.
    */
   autoPaused?: boolean;
+  /**
+   * Held after a recoverable ERROR instead of hard-failing (disk full, network
+   * drop, auth/API issue, rate limit, …). A blocked item is also `paused` (pump
+   * won't start it) but carries a reason + fix hint. Transient kinds auto-retry
+   * with backoff (`nextRetryAt`); the rest wait for the user to hit Retry.
+   */
+  blocked?: boolean;
+  blockedKind?: BlockKind;
+  /** Raw error message (for detail / debugging). */
+  blockedError?: string;
+  /** How many auto-retries have already been spent. */
+  retries?: number;
+  /** Epoch ms of the next scheduled auto-retry (transient kinds only). */
+  nextRetryAt?: number;
+}
+
+/** Recoverable failure class — drives the fix hint + whether we auto-retry. */
+export type BlockKind = "disk" | "network" | "auth" | "rate" | "unknown";
+
+const MAX_AUTO_RETRIES = 6;
+/** Backoff schedule (ms) for transient auto-retries; last value repeats. */
+const RETRY_BACKOFF = [10_000, 20_000, 40_000, 60_000, 120_000, 300_000];
+
+/** Classify a raw download error into a recoverable block. `autoRetry` items
+ *  (network / rate) resume on their own after a backoff; the rest (disk / auth /
+ *  unknown) need the user to fix something, then hit Retry. Nothing hard-fails. */
+export function classifyBlock(msg: string): { kind: BlockKind; autoRetry: boolean; hint: string } {
+  const m = (msg || "").toLowerCase();
+  if (/(no space|not enough space|os error 112|enospc|errno 28|disk full|insufficient disk)/.test(m))
+    return { kind: "disk", autoRetry: false, hint: "Not enough disk space. Free up space, then Retry." };
+  if (/(oauth2\/token|unauthorized|invalid_grant|token|forbidden|\b401\b|\b403\b|access_denied|insufficientpermission|scope)/.test(m))
+    return { kind: "auth", autoRetry: false, hint: "Account/API access issue. Reconnect the account, then Retry." };
+  if (/(\b429\b|rate limit|too many requests|\b413\b|payload too large|userratelimit|quota)/.test(m))
+    return { kind: "rate", autoRetry: true, hint: "Rate-limited by the provider — retrying automatically." };
+  if (/(error sending request|connection|timed out|timeout|dns|network|reset|temporar|\b50[234]\b|unreachable|broken pipe|eof)/.test(m))
+    return { kind: "network", autoRetry: true, hint: "Network problem — retrying automatically." };
+  return { kind: "unknown", autoRetry: false, hint: "Paused after an error. Retry when ready." };
 }
 
 /** A started download we track so it survives an app restart and can resume. */
@@ -290,6 +327,9 @@ function startableQueued(queue: QueueItem[], lane: Lane): QueueItem[] {
  * falsy, so the old `!q.paused` test treated them as live work).
  */
 export function needsPolling(queue: QueueItem[], inflight: InflightItem[]): boolean {
+  // Blocked transfers awaiting an auto-retry keep the poll alive so the retry
+  // scheduler can fire (they're `paused`, so the startable check below misses them).
+  if (queue.some((q) => q.nextRetryAt != null)) return true;
   if (inflight.length > 0) return true;
   return queue.some((q) => !q.paused && !q.autoPaused);
 }
@@ -399,6 +439,8 @@ interface TransfersState {
   pause: (jobId: number) => Promise<void>;
   /** Resume a paused queue item (it continues from its partial file). */
   resumePaused: (id: string) => void;
+  /** Retry every blocked ("needs attention") transfer at once. */
+  retryAllBlocked: () => void;
   /** Start a queued item immediately, in parallel — bypasses the concurrency gate. */
   forceStart: (id: string) => Promise<void>;
   /** Fully remove a job (active or finished): stop it and drop it from the list
@@ -629,11 +671,48 @@ export const useTransfers = create<TransfersState>((set, get) => ({
     // Jobs the user deleted are hidden and never recorded to history, even while
     // the backend still returns them (until it stops tracking them).
     const jobs = polled.filter((j) => j.kind !== "upload" && !deletedJobIds.has(j.jobId));
-    // Record finished/cancelled jobs to history — except ones the user paused
-    // OR we auto-paused (those are kept for resume, not logged as cancelled).
-    // Surface real failure reasons as a toast so downloads never fail silently.
-    // These are idempotent (history.record + the failedToasted set guard against
-    // repeats), so they run every tick regardless of the no-op short-circuit.
+
+    // GRACEFUL FAILURE: a download that errored out is HELD as "needs attention"
+    // (partial kept, reason tagged) instead of hard-failing — so nothing is lost
+    // and the user can fix + retry. Transient kinds auto-retry with backoff. Do
+    // this BEFORE the history loop and add the jobId to pausedJobIds so the same
+    // job is never also logged as a failure.
+    const nowB = Date.now();
+    const newlyBlocked: QueueItem[] = [];
+    for (const j of jobs) {
+      if (!(j.finished && !j.success && !j.cancelled)) continue;
+      if (pausedJobIds.has(j.jobId) || deletedJobIds.has(j.jobId)) continue;
+      const inf = get().inflight.find((i) => i.jobId === j.jobId);
+      if (!inf) continue; // no resume info — fall through to a normal failure below
+      const { kind, autoRetry, hint } = classifyBlock(j.error || "");
+      const retries = inf.retries ?? 0;
+      const willAutoRetry = autoRetry && retries < MAX_AUTO_RETRIES;
+      pausedJobIds.add(j.jobId); // don't let the history loop record it as failed
+      failedToasted.add(j.jobId); // …or toast it as failed
+      newlyBlocked.push({
+        id: inf.id,
+        accountId: inf.accountId,
+        item: inf.item,
+        dest: inf.dest,
+        lane: inf.lane,
+        resumedBytes: j.bytes || inf.bytes || inf.resumedBytes || 0,
+        paused: true,
+        blocked: true,
+        blockedKind: kind,
+        blockedError: j.error || "unknown error",
+        retries: willAutoRetry ? retries + 1 : retries,
+        nextRetryAt: willAutoRetry ? nowB + RETRY_BACKOFF[Math.min(retries, RETRY_BACKOFF.length - 1)] : undefined,
+      });
+      useToasts.getState().push(willAutoRetry ? `Retrying · ${j.name} — ${hint}` : `Paused · ${j.name} — ${hint}`, "info", 5000);
+    }
+    if (newlyBlocked.length > 0) {
+      const q = [...get().queue, ...newlyBlocked.map(withLane)];
+      writeJson(QUEUE_KEY, q);
+      set({ queue: q });
+    }
+
+    // Record finished/cancelled jobs to history — except ones the user paused,
+    // we auto-paused, OR we just blocked (kept for resume, not logged as failed).
     for (const j of jobs) {
       if ((j.finished || j.cancelled) && !pausedJobIds.has(j.jobId)) {
         const inf = get().inflight.find((i) => i.jobId === j.jobId);
@@ -646,6 +725,17 @@ export const useTransfers = create<TransfersState>((set, get) => ({
         failedToasted.add(j.jobId);
         useToasts.getState().push(`Download failed · ${j.name}: ${j.error || "unknown error"}`, "error");
       }
+    }
+
+    // Auto-retry due blocked transfers (transient kinds past their backoff).
+    if (get().queue.some((q) => q.blocked && q.nextRetryAt != null && nowB >= q.nextRetryAt)) {
+      const q = get().queue.map((it) =>
+        it.blocked && it.nextRetryAt != null && nowB >= it.nextRetryAt
+          ? { ...it, paused: false, blocked: false, blockedKind: undefined, blockedError: undefined, nextRetryAt: undefined }
+          : it,
+      );
+      writeJson(QUEUE_KEY, q);
+      set({ queue: q });
     }
 
     // No-op short-circuit: only push new job state when it actually differs from
@@ -737,7 +827,26 @@ export const useTransfers = create<TransfersState>((set, get) => ({
   },
 
   resumePaused: (id) => {
-    const queue = get().queue.map((q) => (q.id === id ? { ...q, paused: false } : q));
+    // Also clears a "blocked / needs attention" hold (manual Retry): reset the
+    // auto-retry budget so a fixed transfer gets its full retry allowance again.
+    const queue = get().queue.map((q) =>
+      q.id === id
+        ? { ...q, paused: false, blocked: false, blockedKind: undefined, blockedError: undefined, nextRetryAt: undefined, retries: 0 }
+        : q,
+    );
+    writeJson(QUEUE_KEY, queue);
+    set({ queue });
+    get().ensurePolling();
+    void get().pump();
+  },
+
+  retryAllBlocked: () => {
+    if (!get().queue.some((q) => q.blocked)) return;
+    const queue = get().queue.map((q) =>
+      q.blocked
+        ? { ...q, paused: false, blocked: false, blockedKind: undefined, blockedError: undefined, nextRetryAt: undefined, retries: 0 }
+        : q,
+    );
     writeJson(QUEUE_KEY, queue);
     set({ queue });
     get().ensurePolling();

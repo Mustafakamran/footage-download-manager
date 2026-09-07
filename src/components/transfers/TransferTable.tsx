@@ -1,4 +1,4 @@
-import { memo, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Pause, Play, X, Square, Zap, Trash2, RotateCcw, Copy, FolderOpen, FolderSymlink, AlertCircle } from "lucide-react";
 import { formatBytes, formatSpeed, formatEta } from "../../lib/format";
@@ -51,6 +51,7 @@ function buildMenu(row: TransferRow, a: RowActions, onRequestDelete: (r: Transfe
   if (row.queueId) {
     if (a.onForceStart) items.push({ label: "Force download now", icon: Zap, onClick: () => a.onForceStart!(row.queueId!) });
     if (row.state === "paused" && a.onResumeQueued) items.push({ label: "Resume", icon: Play, onClick: () => a.onResumeQueued!(row.queueId!) });
+    if (row.state === "blocked" && !row.autoRetry && a.onResumeQueued) items.push({ label: "Retry", icon: RotateCcw, onClick: () => a.onResumeQueued!(row.queueId!) });
   }
   if (done && row.item && a.onResumeFailed) {
     items.push({ label: row.state === "failed" ? "Retry" : "Download again", icon: RotateCcw, onClick: () => a.onResumeFailed!(row) });
@@ -66,6 +67,31 @@ function buildMenu(row: TransferRow, a: RowActions, onRequestDelete: (r: Transfe
   return items;
 }
 
+const isRetryable = (r: TransferRow) =>
+  (r.state === "blocked" && !r.autoRetry && !!r.queueId) || (r.state === "failed" && !!r.item);
+const isPausable = (r: TransferRow) =>
+  (r.state === "downloading" || r.state === "uploading") && r.jobId != null && !r.upload;
+const isResumable = (r: TransferRow) => r.state === "paused" && !!r.queueId;
+
+/** Apply a retry/resume to a single row (blocked queue → resume, failed → re-enqueue). */
+function retryRow(r: TransferRow, a: RowActions) {
+  if (r.state === "failed" && r.item) a.onResumeFailed?.(r);
+  else if (r.queueId) a.onResumeQueued?.(r.queueId);
+}
+
+/** Right-click menu when multiple rows are selected — batch actions across all. */
+function buildBatchMenu(sel: TransferRow[], a: RowActions, onRequestBulkDelete: () => void): MenuItem[] {
+  const items: MenuItem[] = [];
+  const retry = sel.filter(isRetryable);
+  const pause = sel.filter(isPausable);
+  const resume = sel.filter(isResumable);
+  if (retry.length) items.push({ label: `Retry ${retry.length}`, icon: RotateCcw, onClick: () => retry.forEach((r) => retryRow(r, a)) });
+  if (resume.length) items.push({ label: `Resume ${resume.length}`, icon: Play, onClick: () => resume.forEach((r) => a.onResumeQueued?.(r.queueId!)) });
+  if (pause.length) items.push({ label: `Pause ${pause.length}`, icon: Pause, onClick: () => pause.forEach((r) => a.onPause?.(r.jobId!)) });
+  if (a.onDelete) items.push({ label: `Delete ${sel.length}…`, icon: Trash2, danger: true, separator: items.length > 0, onClick: onRequestBulkDelete });
+  return items;
+}
+
 // Shared grid so the header and every row line up. Columns:
 // #  Name  Size  Status  Speed  ETA  Source  Actions
 const COLS = "28px minmax(0,1fr) 84px 188px 92px 78px minmax(120px,168px) 66px";
@@ -76,9 +102,18 @@ const STATE_COLOR: Record<TransferState, string> = {
   queued: "var(--faint)",
   paused: "var(--faint)",
   gated: "var(--faint)",
+  blocked: "var(--warn)",
   completed: "var(--ok)",
   failed: "var(--err)",
   cancelled: "var(--faint)",
+};
+
+const BLOCK_LABEL: Record<string, string> = {
+  disk: "Needs space",
+  network: "Network issue",
+  auth: "Access issue",
+  rate: "Rate-limited",
+  unknown: "Needs attention",
 };
 
 function stateLabel(r: TransferRow): string {
@@ -88,6 +123,7 @@ function stateLabel(r: TransferRow): string {
     case "queued": return "Queued";
     case "paused": return `Paused ${r.pct}%`;
     case "gated": return "Waiting…";
+    case "blocked": return r.autoRetry ? "Retrying…" : BLOCK_LABEL[r.blockedKind ?? "unknown"];
     case "completed": return "Completed";
     case "failed": return "Failed";
     case "cancelled": return "Cancelled";
@@ -130,7 +166,7 @@ const Row = memo(function Row({
   row: TransferRow;
   index: number;
   selected: boolean;
-  onSelect: () => void;
+  onSelect: (e: React.MouseEvent) => void;
   onContext: (e: React.MouseEvent) => void;
   onRequestDelete: (row: TransferRow) => void;
   actions: RowActions;
@@ -142,7 +178,7 @@ const Row = memo(function Row({
       role="row"
       onClick={onSelect}
       onContextMenu={onContext}
-      className={`group grid cursor-pointer items-center gap-2 border-b border-[var(--line)] px-4 py-[7px] text-[12px] transition-colors ${selected ? "bg-[var(--accw)]" : "hover:bg-[var(--soft)]"}`}
+      className={`group grid cursor-pointer select-none items-center gap-2 border-b border-[var(--line)] px-4 py-[7px] text-[12px] transition-colors ${selected ? "bg-[var(--accw)]" : "hover:bg-[var(--soft)]"}`}
       style={{ gridTemplateColumns: COLS }}
     >
       <span className="tnum text-right text-[11px] text-[var(--faint)]">{index + 1}</span>
@@ -163,7 +199,9 @@ const Row = memo(function Row({
       <span className="tnum text-right text-[var(--faint)]">{active ? formatEta(row.eta) : "·"}</span>
 
       <span className="truncate text-right text-[11px] text-[var(--faint)]" data-tip={row.error || row.source}>
-        {row.state === "failed" && row.error ? <span className="text-[var(--err)]">{row.error}</span> : row.source}
+        {row.state === "failed" && row.error ? <span className="text-[var(--err)]">{row.error}</span>
+          : row.state === "blocked" && row.error ? <span className="text-[var(--warn)]">{row.error}</span>
+          : row.source}
       </span>
 
       <span className="flex items-center justify-end gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
@@ -175,6 +213,9 @@ const Row = memo(function Row({
         )}
         {row.queueId && row.state === "paused" && actions.onResumeQueued && (
           <IconBtn title="Resume" onClick={() => actions.onResumeQueued!(row.queueId!)}><Play size={13} /></IconBtn>
+        )}
+        {row.queueId && row.state === "blocked" && !row.autoRetry && actions.onResumeQueued && (
+          <IconBtn title="Retry" onClick={() => actions.onResumeQueued!(row.queueId!)}><RotateCcw size={13} /></IconBtn>
         )}
         {row.queueId && actions.onRemoveQueued && (
           <IconBtn title="Remove" danger onClick={() => actions.onRemoveQueued!(row.queueId!)}><X size={13} /></IconBtn>
@@ -203,7 +244,7 @@ function Stat({ label, value, color }: { label: string; value: React.ReactNode; 
   return (
     <div className="min-w-0">
       <div className="mb-0.5 font-mono text-[9.5px] font-semibold uppercase tracking-[0.06em] text-[var(--faint)]">{label}</div>
-      <div className="tnum truncate text-[12.5px] font-medium" style={{ color: color ?? "var(--ink)" }} data-tip={typeof value === "string" ? value : undefined}>{value}</div>
+      <div className="tnum select-text truncate text-[12.5px] font-medium" style={{ color: color ?? "var(--ink)" }} data-tip={typeof value === "string" ? value : undefined}>{value}</div>
     </div>
   );
 }
@@ -241,7 +282,7 @@ function InfoPanel({ row, samples, stats }: { row: TransferRow; samples: number[
     <div className="flex min-h-0 flex-col border-t border-[var(--line)] bg-[var(--card)]">
       <div className="flex items-center gap-2 px-5 pt-3">
         <ft.Icon size={16} style={{ color: ft.color }} className="shrink-0" />
-        <span className="truncate text-[13px] font-semibold text-[var(--ink)]">{row.name}</span>
+        <span className="select-text truncate text-[13px] font-semibold text-[var(--ink)]">{row.name}</span>
         <span className="ml-1 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold" style={{ color, background: "var(--soft)" }}>{stateLabel(row)}</span>
       </div>
       <div className="min-h-0 flex-1 overflow-auto px-5 pb-4 pt-3">
@@ -313,19 +354,131 @@ function DeleteDialog({ row, onClose, onConfirm }: { row: TransferRow; onClose: 
   );
 }
 
+/** Confirm dialog for removing many transfers at once. */
+function BulkDeleteDialog({ rows, onClose, onConfirm }: { rows: TransferRow[]; onClose: () => void; onConfirm: (withFiles: boolean) => void }) {
+  const anyFiles = rows.some((r) => !r.upload);
+  return createPortal(
+    <div className="fixed inset-0 z-[160] flex items-center justify-center bg-black/40 p-4" onMouseDown={onClose}>
+      <div className="animate-pop w-[420px] max-w-full rounded-[14px] border border-[var(--line)] bg-[var(--card)] p-5 shadow-[var(--shadow-lg)]" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-2">
+          <Trash2 size={16} className="text-[var(--err)]" />
+          <h2 className="text-[15px] font-semibold text-[var(--ink)]">Delete {rows.length} transfers</h2>
+        </div>
+        <p className="mt-1 text-[12.5px] text-[var(--faint)]">Remove them from the list only, or also delete the downloaded files from disk? Deleting files can’t be undone.</p>
+        <div className="mt-4 flex flex-col gap-2">
+          <button onClick={() => onConfirm(false)} className="w-full rounded-[9px] border border-[var(--line)] px-3 py-2 text-[13px] font-semibold text-[var(--ink)] hover:bg-[var(--soft)]">
+            Remove from list
+          </button>
+          {anyFiles && (
+            <button onClick={() => onConfirm(true)} className="w-full rounded-[9px] border border-[var(--err)] bg-[var(--errw)] px-3 py-2 text-[13px] font-semibold text-[var(--err)] hover:opacity-90">
+              Delete from list and files
+            </button>
+          )}
+          <button onClick={onClose} className="w-full rounded-[9px] px-3 py-2 text-[13px] font-medium text-[var(--faint)] hover:text-[var(--ink)]">
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 export function TransferTable({ rows, speedHistory, statsFor, ...actions }: TransferTableProps) {
-  const [sel, setSel] = useState<string | null>(null);
-  const [menu, setMenu] = useState<{ x: number; y: number; row: TransferRow } | null>(null);
+  const [sel, setSel] = useState<Set<string>>(() => new Set());
+  const anchorRef = useRef<string | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; batch: boolean } | null>(null);
   const [pendingDelete, setPendingDelete] = useState<TransferRow | null>(null);
-  const selected = sel ? rows.find((r) => r.id === sel) : undefined;
+  const [pendingBulk, setPendingBulk] = useState<TransferRow[] | null>(null);
+
+  // Prune ids that no longer exist (rows finished/removed) so the selection and
+  // its derived UI (info panel, batch bar) never point at a stale row.
+  useEffect(() => {
+    setSel((prev) => {
+      if (prev.size === 0) return prev;
+      const live = new Set(rows.map((r) => r.id));
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of prev) { if (live.has(id)) next.add(id); else changed = true; }
+      return changed ? next : prev;
+    });
+  }, [rows]);
+
+  const selectedRows = useMemo(() => rows.filter((r) => sel.has(r.id)), [rows, sel]);
+  const single = sel.size === 1 ? selectedRows[0] : undefined;
+
+  const selectRow = (e: React.MouseEvent, r: TransferRow, i: number) => {
+    const id = r.id;
+    if (e.metaKey || e.ctrlKey) {
+      setSel((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+      anchorRef.current = id;
+    } else if (e.shiftKey && anchorRef.current) {
+      const ai = rows.findIndex((x) => x.id === anchorRef.current);
+      if (ai >= 0) {
+        const [lo, hi] = ai < i ? [ai, i] : [i, ai];
+        setSel(new Set(rows.slice(lo, hi + 1).map((x) => x.id)));
+      } else { setSel(new Set([id])); anchorRef.current = id; }
+    } else {
+      setSel((prev) => (prev.size === 1 && prev.has(id) ? new Set() : new Set([id])));
+      anchorRef.current = id;
+    }
+  };
+
   const openMenu = (e: React.MouseEvent, r: TransferRow) => {
     e.preventDefault();
-    setSel(r.id);
-    setMenu({ x: e.clientX, y: e.clientY, row: r });
+    // Right-clicking a row already inside a multi-selection keeps it and opens a
+    // batch menu; otherwise the click selects just that row.
+    const batch = sel.has(r.id) && sel.size > 1;
+    if (!batch) { setSel(new Set([r.id])); anchorRef.current = r.id; }
+    setMenu({ x: e.clientX, y: e.clientY, batch });
+  };
+
+  // Keyboard: Escape clears, Cmd/Ctrl+A selects all, Delete removes the selection.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      if (e.key === "Escape") { setSel(new Set()); setMenu(null); }
+      else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a" && rows.length) {
+        e.preventDefault();
+        setSel(new Set(rows.map((r) => r.id)));
+      } else if ((e.key === "Delete" || e.key === "Backspace") && sel.size && actions.onDelete) {
+        e.preventDefault();
+        const rs = rows.filter((r) => sel.has(r.id));
+        if (rs.length === 1) setPendingDelete(rs[0]); else if (rs.length) setPendingBulk(rs);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [rows, sel, actions]);
+
+  const menuRows = menu?.batch ? selectedRows : single ? [single] : [];
+  const menuItems = menu
+    ? menu.batch
+      ? buildBatchMenu(selectedRows, actions, () => setPendingBulk(selectedRows))
+      : menuRows[0]
+        ? buildMenu(menuRows[0], actions, (r) => setPendingDelete(r))
+        : []
+    : [];
+
+  const applyBulk = (rs: TransferRow[], withFiles: boolean) => {
+    rs.forEach((r) => actions.onDelete?.(r, withFiles));
+    setPendingBulk(null);
+    setSel(new Set());
   };
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-[13px] border border-[var(--line)] bg-[var(--card)]">
+      {/* Batch action bar — shown while more than one row is selected. */}
+      {sel.size > 1 && (
+        <BatchBar
+          rows={selectedRows}
+          actions={actions}
+          onClear={() => setSel(new Set())}
+          onBulkDelete={() => setPendingBulk(selectedRows)}
+        />
+      )}
+
       {/* Column header */}
       <div
         className="grid items-center gap-2 border-b border-[var(--line)] bg-[var(--soft)] px-4 py-2 font-mono text-[10px] font-semibold uppercase tracking-[0.05em] text-[var(--faint)]"
@@ -348,8 +501,8 @@ export function TransferTable({ rows, speedHistory, statsFor, ...actions }: Tran
             key={r.id}
             row={r}
             index={i}
-            selected={r.id === sel}
-            onSelect={() => setSel((cur) => (cur === r.id ? null : r.id))}
+            selected={sel.has(r.id)}
+            onSelect={(e) => selectRow(e, r, i)}
             onContext={(e) => openMenu(e, r)}
             onRequestDelete={setPendingDelete}
             actions={actions}
@@ -357,28 +510,63 @@ export function TransferTable({ rows, speedHistory, statsFor, ...actions }: Tran
         ))}
       </div>
 
-      {/* Bottom info panel for the selected row */}
-      {selected && (
+      {/* Bottom info panel — only for a single selected row. */}
+      {single && (
         <div className="max-h-[46%] min-h-0 shrink-0">
           <InfoPanel
-            row={selected}
-            samples={(selected.jobId != null && speedHistory?.[selected.jobId]) || []}
-            stats={selected.jobId != null ? statsFor?.(selected.jobId) : undefined}
+            row={single}
+            samples={(single.jobId != null && speedHistory?.[single.jobId]) || []}
+            stats={single.jobId != null ? statsFor?.(single.jobId) : undefined}
           />
         </div>
       )}
 
-      {menu && (
-        <ContextMenu x={menu.x} y={menu.y} items={buildMenu(menu.row, actions, (r) => setPendingDelete(r))} onClose={() => setMenu(null)} />
+      {menu && menuItems.length > 0 && (
+        <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />
       )}
 
       {pendingDelete && (
         <DeleteDialog
           row={pendingDelete}
           onClose={() => setPendingDelete(null)}
-          onConfirm={(withFiles) => { actions.onDelete?.(pendingDelete, withFiles); setPendingDelete(null); }}
+          onConfirm={(withFiles) => { actions.onDelete?.(pendingDelete, withFiles); setPendingDelete(null); setSel(new Set()); }}
         />
       )}
+
+      {pendingBulk && (
+        <BulkDeleteDialog
+          rows={pendingBulk}
+          onClose={() => setPendingBulk(null)}
+          onConfirm={(withFiles) => applyBulk(pendingBulk, withFiles)}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Sticky toolbar with batch actions for the current multi-selection. */
+function BatchBar({ rows, actions, onClear, onBulkDelete }: { rows: TransferRow[]; actions: RowActions; onClear: () => void; onBulkDelete: () => void }) {
+  const retry = rows.filter(isRetryable);
+  const pause = rows.filter(isPausable);
+  const resume = rows.filter(isResumable);
+  const Btn = ({ icon: Icon, label, danger, onClick }: { icon: typeof RotateCcw; label: string; danger?: boolean; onClick: () => void }) => (
+    <button
+      onClick={onClick}
+      className={`flex h-7 items-center gap-1.5 rounded-[8px] border px-2.5 text-[12px] font-semibold ${danger ? "border-[var(--err)]/40 text-[var(--err)] hover:bg-[var(--errw)]" : "border-[var(--line)] text-[var(--ink)] hover:bg-[var(--soft)]"}`}
+    >
+      <Icon size={13} /> {label}
+    </button>
+  );
+  return (
+    <div className="flex items-center gap-2 border-b border-[var(--line)] bg-[var(--accw)] px-4 py-2">
+      <span className="text-[12.5px] font-semibold text-[var(--ink)]">{rows.length} selected</span>
+      <div className="ml-1 flex items-center gap-1.5">
+        {retry.length > 0 && <Btn icon={RotateCcw} label={`Retry ${retry.length}`} onClick={() => retry.forEach((r) => retryRow(r, actions))} />}
+        {resume.length > 0 && <Btn icon={Play} label={`Resume ${resume.length}`} onClick={() => resume.forEach((r) => actions.onResumeQueued?.(r.queueId!))} />}
+        {pause.length > 0 && <Btn icon={Pause} label={`Pause ${pause.length}`} onClick={() => pause.forEach((r) => actions.onPause?.(r.jobId!))} />}
+        {actions.onDelete && <Btn icon={Trash2} label="Delete" danger onClick={onBulkDelete} />}
+      </div>
+      <button onClick={onClear} className="ml-auto text-[12px] font-medium text-[var(--faint)] hover:text-[var(--ink)]">Clear</button>
     </div>
   );
 }

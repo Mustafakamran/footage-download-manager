@@ -37,3 +37,18 @@ export function formatDate(iso: string): string {
   if (Number.isNaN(d.getTime()) || d.getTime() < Date.UTC(2001, 0, 1)) return "·";
   return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
+
+/** Absolute date + time from an epoch-ms timestamp, e.g. "Sep 8, 2:47 PM". */
+export function formatDateTime(ms: number): string {
+  if (!ms || Number.isNaN(ms)) return "·";
+  const d = new Date(ms);
+  const now = new Date();
+  const sameYear = d.getFullYear() === now.getFullYear();
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    ...(sameYear ? {} : { year: "numeric" }),
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}

@@ -25,6 +25,12 @@ export interface NewFoldersResult {
   allSized: boolean;
   /** A folder's size state: instant from the index, computed on demand, or unknown. */
   sizeOf: (accountId: string, path: string) => SizeValue | undefined;
+  /** Epoch-ms when FDM first identified a folder as new (for the "Identified" label). */
+  seenAtOf: (accountId: string, path: string) => number | undefined;
+  /** Mark every listed folder read (clears the badge) while keeping them on screen. */
+  markAllRead: () => void;
+  /** Dismiss every currently-listed new folder at once (folds them into the baseline). */
+  acknowledgeAll: () => void;
 }
 
 /**
@@ -44,6 +50,7 @@ export function useNewFolders(): NewFoldersResult {
   const sizes = useBrowse((s) => s.sizes);
   const indexEntries = useIndex((s) => s.byAccount);
   const baseline = useNewFoldersBaseline((s) => s.baseline);
+  const seenAt = useNewFoldersBaseline((s) => s.seenAt);
   const historyItems = useHistory((s) => s.items);
   const statusByAccount = useFolderStatus((s) => s.byAccount);
   const visitedByAccount = useVisited((s) => s.byAccount);
@@ -101,10 +108,15 @@ export function useNewFolders(): NewFoldersResult {
           return !st || st === "on_hold";
         },
       );
+      // Newest-identified first (fall back to the folder's drive mod-time until a
+      // first-seen stamp exists) so the freshest additions sit at the top.
+      const seenFor = seenAt[a.id] ?? {};
+      const when = (f: RcItem) => seenFor[f.Path] ?? (Date.parse(f.ModTime) || 0);
+      news.sort((x, y) => when(y) - when(x));
       if (news.length) out.push({ account: a, folders: news });
     }
     return out;
-  }, [accounts, listings, baseline, downloadedByAccount, statusByAccount]);
+  }, [accounts, listings, baseline, downloadedByAccount, statusByAccount, seenAt]);
 
   // Kick off (lazy, concurrency-limited) size computation for each new folder
   // that isn't already sized by the index.
@@ -126,6 +138,24 @@ export function useNewFolders(): NewFoldersResult {
     }
   }, [groups, indexEntries, sizes]);
 
+  // Stamp a first-seen time for each newly-identified folder (once), so the screen
+  // can show WHEN it was detected and order by it. markSeen no-ops known paths.
+  useEffect(() => {
+    for (const g of groups) {
+      useNewFoldersBaseline.getState().markSeen(g.account.id, g.folders.map((f) => f.Path));
+    }
+  }, [groups]);
+
+  const seenAtOf = (accountId: string, path: string): number | undefined => seenAt[accountId]?.[path];
+  const markAllRead = () => {
+    const mark = useVisited.getState().markManyVisited;
+    for (const g of groups) mark(g.account.id, g.folders.map((f) => f.Path));
+  };
+  const acknowledgeAll = () => {
+    const ack = useNewFoldersBaseline.getState().acknowledge;
+    for (const g of groups) ack(g.account.id, g.folders.map((f) => f.Path));
+  };
+
   // The badge counts only folders you HAVEN'T opened yet — opening one clears it
   // from the badge (it stays listed, dimmed, so you can still act on it).
   const count = groups.reduce((n, g) => {
@@ -142,5 +172,5 @@ export function useNewFolders(): NewFoldersResult {
     }
   }
 
-  return { groups, count, totalSize, allSized, sizeOf };
+  return { groups, count, totalSize, allSized, sizeOf, seenAtOf, markAllRead, acknowledgeAll };
 }

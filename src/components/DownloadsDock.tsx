@@ -1,6 +1,15 @@
 import { memo, useMemo, useState } from "react";
-import { ChevronDown, X, Check, AlertCircle, Ban, Clock, Pause, Play, Globe, ArrowDown, ArrowUp, ArrowDownUp } from "lucide-react";
-import { useTransfers, type QueueItem } from "../store/transfers";
+import { ChevronDown, X, Check, AlertCircle, AlertTriangle, RefreshCw, Ban, Clock, Pause, Play, Globe, ArrowDown, ArrowUp, ArrowDownUp } from "lucide-react";
+import { useTransfers, type QueueItem, type BlockKind } from "../store/transfers";
+
+/** Short fix hint per block kind, shown on a "needs attention" transfer. */
+const BLOCK_HINT: Record<BlockKind, string> = {
+  disk: "Free up disk space, then Retry",
+  network: "Network problem — will retry",
+  auth: "Account access issue — reconnect, then Retry",
+  rate: "Rate-limited — will retry",
+  unknown: "Paused after an error — Retry when ready",
+};
 import { useHistory, type HistoryEntry } from "../store/history";
 import { useApp } from "../store/app";
 import { useSettings } from "../store/settings";
@@ -41,8 +50,9 @@ const QueueRow = memo(function QueueRow({ q, position, labelOf }: { q: QueueItem
   const resumePaused = useTransfers((s) => s.resumePaused);
   const ft = fileType(q.item.name, q.item.isDir);
   const gated = !!q.autoPaused && !q.paused;
+  const blocked = !!q.blocked;
   return (
-    <div className="group flex items-center gap-2.5 px-3.5 py-2">
+    <div className={`group flex items-center gap-2.5 px-3.5 py-2 ${blocked ? "bg-[var(--warn)]/8" : ""}`}>
       <span className="relative shrink-0">
         <ft.Icon size={17} style={{ color: ft.color }} className="opacity-60" />
         <ArrowDown size={9} className="absolute -bottom-1 -right-1 rounded-full bg-[var(--card)] text-[var(--faint)]" />
@@ -52,18 +62,29 @@ const QueueRow = memo(function QueueRow({ q, position, labelOf }: { q: QueueItem
           <span className="truncate text-[12.5px] text-[var(--mut)]" title={q.item.name}>{q.item.name}</span>
           <LaneBadge accountId={q.accountId} labelOf={labelOf} />
         </div>
-        <div className="flex items-center gap-1 text-[10.5px] text-[var(--faint)]">
-          {gated ? <Clock size={10} /> : q.paused ? <Pause size={10} /> : <Clock size={10} />}
-          {gated
-            ? "Waiting for Drive/Dropbox…"
-            : q.paused
-              ? `Paused · ${formatBytes(q.resumedBytes ?? 0)} done`
-              : q.resumedBytes
-                ? `Resuming · ${formatBytes(q.resumedBytes)} done`
-                : `Queued · #${position}`}
+        <div className={`flex items-center gap-1 text-[10.5px] ${blocked ? "text-[var(--warn)]" : "text-[var(--faint)]"}`}>
+          {blocked ? <AlertTriangle size={10} /> : gated ? <Clock size={10} /> : q.paused ? <Pause size={10} /> : <Clock size={10} />}
+          <span className="truncate" title={q.blockedError}>
+            {blocked
+              ? q.nextRetryAt
+                ? `Retrying soon — ${BLOCK_HINT[q.blockedKind ?? "unknown"]}`
+                : BLOCK_HINT[q.blockedKind ?? "unknown"]
+              : gated
+                ? "Waiting for Drive/Dropbox…"
+                : q.paused
+                  ? `Paused · ${formatBytes(q.resumedBytes ?? 0)} done`
+                  : q.resumedBytes
+                    ? `Resuming · ${formatBytes(q.resumedBytes)} done`
+                    : `Queued · #${position}`}
+          </span>
         </div>
       </div>
-      {q.paused && (
+      {blocked && !q.nextRetryAt && (
+        <button onClick={() => resumePaused(q.id)} aria-label={`Retry ${q.item.name}`} title="Retry" className="flex shrink-0 items-center gap-1 rounded-[7px] bg-[var(--warn)]/15 px-2 py-1 text-[10.5px] font-semibold text-[var(--warn)] hover:bg-[var(--warn)]/25">
+          <RefreshCw size={11} /> Retry
+        </button>
+      )}
+      {q.paused && !blocked && (
         <button onClick={() => resumePaused(q.id)} aria-label={`Resume ${q.item.name}`} title="Resume" className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[7px] text-[var(--faint)] opacity-0 transition hover:bg-[var(--soft)] hover:text-[var(--acc)] group-hover:opacity-100">
           <Play size={13} />
         </button>
@@ -227,6 +248,9 @@ export function DownloadsDock() {
   // the button (more reliable than a fixed timer).
   const collapse = () => setCollapsing(true);
 
+  const retryAllBlocked = useTransfers((s) => s.retryAllBlocked);
+  const blockedCount = queue.filter((q) => q.blocked && !q.nextRetryAt).length;
+
   const isActive = (j: JobStatus) => !j.finished && !j.cancelled;
   const activeJobs = jobs.filter(isActive);
   const activeUploads = uploads.filter(isActive);
@@ -251,11 +275,15 @@ export function DownloadsDock() {
         className="group animate-pop fixed bottom-4 right-4 z-40 flex h-14 w-14 items-center justify-center rounded-full border border-[var(--line2)] bg-[var(--card)] text-[var(--acc)] shadow-[var(--shadow-lg)] transition-shadow duration-200 hover:shadow-[0_10px_30px_-6px_rgba(0,0,0,0.35)]"
       >
         <ArrowDownUp size={20} className="transition-transform duration-200 group-hover:-translate-y-0.5" />
-        {activeCount > 0 && (
+        {blockedCount > 0 ? (
+          <span className="absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-[var(--warn)] px-1 text-[var(--onacc)]">
+            <AlertTriangle size={11} />
+          </span>
+        ) : activeCount > 0 ? (
           <span className="tnum absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-[var(--acc)] px-1 text-[10px] font-bold text-[var(--onacc)]">
             {activeCount > 9 ? "9+" : activeCount}
           </span>
-        )}
+        ) : null}
       </button>
     );
   }
@@ -307,6 +335,15 @@ export function DownloadsDock() {
           <span className="ml-auto flex h-6 w-6 items-center justify-center text-[var(--faint)]"><ChevronDown size={16} /></span>
         </button>
       </div>
+
+      {/* Needs-attention banner — recoverable failures held for a fix + retry. */}
+      {blockedCount > 0 && (
+        <div className="flex items-center gap-2 border-y border-[var(--warn)]/25 bg-[var(--warn)]/10 px-3.5 py-2 text-[12px] font-medium text-[var(--warn)]">
+          <AlertTriangle size={14} className="shrink-0" />
+          <span className="min-w-0 flex-1">{blockedCount} transfer{blockedCount > 1 ? "s" : ""} need attention</span>
+          <button onClick={() => retryAllBlocked()} className="shrink-0 rounded-[7px] bg-[var(--warn)]/20 px-2 py-1 text-[11px] font-semibold hover:bg-[var(--warn)]/30">Retry all</button>
+        </div>
+      )}
 
       {(
         <>

@@ -294,6 +294,26 @@ input[type="checkbox"] {
   color: var(--text);
 }
 
+/* Desktop-app selection policy: dragging across the UI chrome (cards, labels,
+   buttons, nav) must NOT paint a text-selection highlight — that looks like a
+   web page, not a native app. So selection is off by default and re-enabled
+   only on genuine, copyable text: form fields, paragraphs, and anything a
+   component opts in with `select-text` (Tailwind) / `.selectable`. */
+#root {
+  -webkit-user-select: none;
+  user-select: none;
+}
+input,
+textarea,
+[contenteditable="true"],
+p,
+.selectable,
+.select-text,
+.select-text * {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 /* Tabular, non-jittering numbers for metrics. */
 .tnum {
   font-family: var(--font-mono);
