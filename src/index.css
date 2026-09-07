@@ -550,6 +550,22 @@ input[type="checkbox"]:active {
   transform-origin: top center;
 }
 
+/* Right-side slide-over sheet (e.g. the Shared Drive browser panel). */
+@keyframes sheet-in {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+.animate-sheet-in {
+  animation: sheet-in 280ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+@keyframes sheet-out {
+  from { transform: translateX(0); }
+  to { transform: translateX(100%); }
+}
+.animate-sheet-out {
+  animation: sheet-out 240ms cubic-bezier(0.32, 0.72, 0, 1) forwards;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-rise,
   .animate-pop,
@@ -562,7 +578,9 @@ input[type="checkbox"]:active {
   .animate-badge,
   .animate-fade,
   .animate-spin-once,
-  .animate-toast-out {
+  .animate-toast-out,
+  .animate-sheet-in,
+  .animate-sheet-out {
     animation: none;
   }
 }

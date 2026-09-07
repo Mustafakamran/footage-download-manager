@@ -249,13 +249,24 @@ function folderSizeEqual(a: FolderSizeState, b: FolderSizeState): boolean {
   return a.kind === "known" && b.kind === "known" ? a.bytes === b.bytes : true;
 }
 
-export function BrowsePane({ account, section, path }: { account: Account; section: Section; path: string }) {
+export function BrowsePane({ account, section, path, onNavigate }: { account: Account; section: Section; path: string; onNavigate?: (section: Section, path: string) => void }) {
   const setView = useApp((s) => s.setView);
   const canGoBack = useApp((s) => s.back.length > 0);
   const canGoForward = useApp((s) => s.forward.length > 0);
   const goBack = useApp((s) => s.goBack);
   const goForward = useApp((s) => s.goForward);
   const openReview = useApp((s) => s.openReview);
+  // Embedded mode (e.g. the Shared Drive slide-over): navigation is handled by the
+  // host via onNavigate so it stays inside the panel instead of switching the
+  // whole app's view. When absent, navigate the global view as usual.
+  const embedded = !!onNavigate;
+  const navigate = useCallback(
+    (sec: Section, p: string) => {
+      if (onNavigate) onNavigate(sec, p);
+      else setView({ kind: "browse", accountId: account.id, section: sec, path: p });
+    },
+    [onNavigate, setView, account.id],
+  );
   const entry = useIndex((s) => s.byAccount[account.id]);
   const enqueue = useTransfers((s) => s.enqueue);
   // Active downloads for THIS account — powers the status-footer "N DOWNLOADING".
@@ -987,11 +998,11 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
   const actionsRef = useRef<RowActions>(null!);
   actionsRef.current = {
     toggle,
-    openFolder: (p) => setView({ kind: "browse", accountId: account.id, section: "all", path: p }),
+    openFolder: (p) => navigate("all", p),
     openDir: (item) =>
       item.LinkFolderId
         ? void openShortcutFolder(account.id, item.Name, item.LinkFolderId)
-        : setView({ kind: "browse", accountId: account.id, section: "all", path: item.Path }),
+        : navigate("all", item.Path),
     focus: (item) => setFocused(item),
     openPreview: (item) => usePreview.getState().open(account.id, reviewTarget(item)),
     openReview: (item) => openReview(account.id, reviewTarget(item)),
@@ -1140,27 +1151,30 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
       {/* Toolbar */}
       <div className="flex items-center gap-3 px-6 py-4">
         {/* Back / Forward / Up — history-based navigation (also Alt+←/→ and the
-            mouse back/forward buttons, wired globally in AppShell). */}
-        <div className="flex shrink-0 items-center gap-0.5">
-          <button
-            onClick={goBack}
-            disabled={!canGoBack}
-            aria-label="Back"
-            data-tip="Back"
-            className="flex h-8 w-8 items-center justify-center rounded-[7px] text-[var(--mut)] transition-colors hover:bg-[var(--soft)] hover:text-[var(--ink)] disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent"
-          >
-            <ChevronLeft size={17} />
-          </button>
-          <button
-            onClick={goForward}
-            disabled={!canGoForward}
-            aria-label="Forward"
-            data-tip="Forward"
-            className="flex h-8 w-8 items-center justify-center rounded-[7px] text-[var(--mut)] transition-colors hover:bg-[var(--soft)] hover:text-[var(--ink)] disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent"
-          >
-            <ChevronRight size={17} />
-          </button>
-        </div>
+            mouse back/forward buttons, wired globally in AppShell). Hidden when
+            embedded — global history would fight the host panel's own navigation. */}
+        {!embedded && (
+          <div className="flex shrink-0 items-center gap-0.5">
+            <button
+              onClick={goBack}
+              disabled={!canGoBack}
+              aria-label="Back"
+              data-tip="Back"
+              className="flex h-8 w-8 items-center justify-center rounded-[7px] text-[var(--mut)] transition-colors hover:bg-[var(--soft)] hover:text-[var(--ink)] disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent"
+            >
+              <ChevronLeft size={17} />
+            </button>
+            <button
+              onClick={goForward}
+              disabled={!canGoForward}
+              aria-label="Forward"
+              data-tip="Forward"
+              className="flex h-8 w-8 items-center justify-center rounded-[7px] text-[var(--mut)] transition-colors hover:bg-[var(--soft)] hover:text-[var(--ink)] disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent"
+            >
+              <ChevronRight size={17} />
+            </button>
+          </div>
+        )}
         <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden px-1 py-1.5 font-mono text-[11.5px]">
           <ProviderIcon provider={account.provider} size={13} />
           {q.trim() ? (
@@ -1169,7 +1183,7 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
             <div className="flex min-w-0 items-center gap-1.5 overflow-hidden">
               <button
                 className={`min-w-0 shrink-[2] truncate hover:text-[var(--ink)] ${segments.length === 0 ? "font-semibold text-[var(--ink)]" : "text-[var(--mut)]"}`}
-                onClick={() => setView({ kind: "browse", accountId: account.id, section, path: "" })}
+                onClick={() => navigate(section, "")}
                 data-tip={displayLabel}
               >
                 {displayLabel}
@@ -1184,7 +1198,7 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
                     className="text-[var(--mut)] hover:text-[var(--ink)]"
                     data-tip={segments.slice(0, -1).join(" / ")}
                     aria-label="Parent folders"
-                    onClick={() => setView({ kind: "browse", accountId: account.id, section, path: segments.slice(0, -1).join("/") })}
+                    onClick={() => navigate(section, segments.slice(0, -1).join("/"))}
                   >
                     …
                   </button>
@@ -1216,7 +1230,7 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
       {/* Second toolbar row: section pills left, action controls right — the
           controls live here so the breadcrumb above gets the full width. */}
       <div className="flex items-center gap-3 px-6 pb-3">
-        {!q.trim() && (
+        {!embedded && !q.trim() && (
           <div className="flex items-center gap-1.5">
             {/* "Shared with me" pill dropped — the Shared Drives screen covers it. */}
             {(Object.keys(SECTION_TITLE) as Section[]).filter((k) => k !== "shared").map((k) => {
@@ -1224,7 +1238,7 @@ export function BrowsePane({ account, section, path }: { account: Account; secti
               return (
                 <button
                   key={k}
-                  onClick={() => setView({ kind: "browse", accountId: account.id, section: k, path: "" })}
+                  onClick={() => navigate(k, "")}
                   className={`h-8 rounded-full border px-[15px] text-[12.5px] font-semibold ${
                     on
                       ? "border-[var(--acc)] bg-[var(--acc)] text-[var(--onacc)]"

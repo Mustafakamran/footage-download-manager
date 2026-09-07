@@ -17,6 +17,7 @@ import { SettingsDialog } from "./SettingsDialog";
 import { PreviewOverlay } from "./PreviewOverlay";
 import { NewFoldersView } from "./NewFoldersView";
 import { SharedDrivesView } from "./SharedDrivesView";
+import { SharedDriveDock } from "./SharedDriveDock";
 import { UpdateBanner } from "./UpdateBanner";
 import { TooltipLayer } from "./ui/Tooltip";
 
@@ -96,7 +97,7 @@ export function AppShell() {
       <div className="flex min-h-0 flex-1 gap-2.5 px-2.5 pb-2.5">
         <Sidebar />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2.5">
-          <div className="min-h-0 flex-1 overflow-hidden rounded-[12px] border border-[var(--border)] bg-[var(--surface)]">
+          <div className="relative min-h-0 flex-1 overflow-hidden rounded-[12px] border border-[var(--border)] bg-[var(--surface)]">
             {/* Search is now an anchored dropdown in the TopBar (not a full-page
                 takeover), so the normal view always renders underneath it. */}
             {view.kind === "home" && <Dashboard />}
@@ -111,6 +112,9 @@ export function AppShell() {
               ) : (
                 <ConnectView />
               ))}
+            {/* App-wide Shared Drive dock (tab rail + slide-over) — lives in the
+                content shell so it never covers the top bar / search. */}
+            <SharedDriveDock />
           </div>
           {/* The Transfers screen shows its own progress table, so the dock would
               duplicate it there — only float it over other screens. */}

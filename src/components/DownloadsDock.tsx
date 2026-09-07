@@ -266,25 +266,39 @@ export function DownloadsDock() {
   // Keep the panel mounted WHILE collapsing so its exit animation can play.
   const expanded = open || dragActive || collapsing;
 
-  // Collapsed → floating circular button (bottom-right). Click to expand.
+  // Collapsed → slim vertical bookmark tab on the right edge. Click to expand.
   if (!expanded) {
+    const transferring = activeJobs.length + activeUploads.length;
     return (
-      <button
-        onClick={() => setOpen(true)}
-        aria-label="Open transfers"
-        className="group animate-pop fixed bottom-4 right-4 z-40 flex h-14 w-14 items-center justify-center rounded-full border border-[var(--line2)] bg-[var(--card)] text-[var(--acc)] shadow-[var(--shadow-lg)] transition-shadow duration-200 hover:shadow-[0_10px_30px_-6px_rgba(0,0,0,0.35)]"
-      >
-        <ArrowDownUp size={20} className="transition-transform duration-200 group-hover:-translate-y-0.5" />
-        {blockedCount > 0 ? (
-          <span className="absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-[var(--warn)] px-1 text-[var(--onacc)]">
-            <AlertTriangle size={11} />
+      <div className="animate-pop fixed bottom-16 right-0 z-40">
+        <button
+          onClick={() => setOpen(true)}
+          aria-label="Open transfers"
+          data-tip="Transfers"
+          className="group relative flex w-[40px] flex-col items-center gap-1.5 rounded-l-[11px] border border-r-0 border-[var(--line)] bg-[var(--card)] py-2.5 text-[var(--acc)] shadow-[-6px_0_16px_-8px_rgba(0,0,0,0.25)] transition-colors hover:bg-[var(--soft)]"
+        >
+          <span className="relative shrink-0">
+            <ArrowDownUp size={16} />
+            {blockedCount > 0 ? (
+              <span className="absolute -right-1.5 -top-1.5 flex h-[14px] w-[14px] items-center justify-center rounded-full border-2 border-[var(--card)] bg-[var(--warn)] text-[var(--onacc)]">
+                <AlertTriangle size={8} />
+              </span>
+            ) : transferring > 0 ? (
+              <span className="absolute -right-1.5 -top-1.5 h-[12px] w-[12px] rounded-full border-2 border-[var(--card)] bg-[var(--ok)]" />
+            ) : activeCount > 0 ? (
+              <span className="tnum absolute -right-2 -top-2 flex h-[15px] min-w-[15px] items-center justify-center rounded-full border-2 border-[var(--card)] bg-[var(--acc)] px-0.5 text-[9px] font-bold text-[var(--onacc)]">
+                {activeCount > 9 ? "9+" : activeCount}
+              </span>
+            ) : null}
           </span>
-        ) : activeCount > 0 ? (
-          <span className="tnum absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-[var(--acc)] px-1 text-[10px] font-bold text-[var(--onacc)]">
-            {activeCount > 9 ? "9+" : activeCount}
+          <span
+            className="text-[11.5px] font-semibold text-[var(--ink)]"
+            style={{ writingMode: "vertical-rl", transform: "rotate(180deg)" }}
+          >
+            Transfers
           </span>
-        ) : null}
-      </button>
+        </button>
+      </div>
     );
   }
 
@@ -317,7 +331,7 @@ export function DownloadsDock() {
     <div
       data-transfer-drop
       onAnimationEnd={(e) => { if (collapsing && e.animationName === "drawer-collapse") { setCollapsing(false); setOpen(false); } }}
-      className={`${collapsing ? "animate-drawer-out" : "animate-drawer"} fixed bottom-3 right-3 z-40 flex w-[400px] max-w-[calc(100vw-24px)] flex-col overflow-hidden rounded-[14px] border bg-[var(--card)] shadow-[var(--shadow-lg)] ${dragActive ? "border-2 border-dashed border-[var(--acc)]" : "border border-[var(--line2)]"}`}
+      className={`${collapsing ? "animate-drawer-out" : "animate-drawer"} fixed bottom-0 right-6 z-40 flex w-[400px] max-w-[calc(100vw-48px)] flex-col overflow-hidden rounded-t-[14px] border border-b-0 bg-[var(--card)] shadow-[var(--shadow-lg)] ${dragActive ? "border-2 border-dashed border-[var(--acc)]" : "border border-b-0 border-[var(--line2)]"}`}
     >
       {/* Drop-to-download hint while dragging an app file/folder onto the drawer. */}
       {dragActive && (
