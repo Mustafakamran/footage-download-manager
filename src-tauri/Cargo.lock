@@ -1541,7 +1541,7 @@ dependencies = [
 
 [[package]]
 name = "google-drive-downloader"
-version = "2.8.7"
+version = "2.8.8"
 dependencies = [
  "base64 0.22.1",
  "keyring",

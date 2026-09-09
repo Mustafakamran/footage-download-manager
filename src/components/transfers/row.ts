@@ -44,6 +44,8 @@ export interface TransferRow {
   blockedKind?: BlockKind;
   /** A blocked transfer scheduled for automatic retry (transient failures). */
   autoRetry?: boolean;
+  /** Live connected-peer count for torrent rows (-1/undefined = n/a). */
+  peers?: number;
   /** Finished-at timestamp (history rows). */
   at?: number;
   /** Present on failed rows so the panel/actions can re-enqueue. */
@@ -96,6 +98,7 @@ export function jobRow(j: JobStatus, labelOf: LabelOf, item?: DownloadItem): Tra
     source: sourceLabel(j.accountId, item, labelOf),
     account: labelOf(j.accountId),
     upload: j.kind === "upload",
+    peers: j.peers,
   };
 }
 

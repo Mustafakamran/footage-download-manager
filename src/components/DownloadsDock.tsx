@@ -153,11 +153,21 @@ const Row = memo(function Row({ job, labelOf }: { job: JobStatus; labelOf: Label
         </div>
         <div className="tnum mt-0.5 text-[10.5px] leading-tight text-[var(--faint)]">
           {active ? (
-            <>
-              {formatBytes(job.bytes)} / {formatBytes(job.totalBytes || job.bytes)}
-              {job.speed > 0 ? ` · ${formatSpeed(job.speed)}` : ""}
-              {job.eta != null ? ` · ${formatEta(job.eta)} left` : ""}
-            </>
+            (() => {
+              const peers = job.peers ?? -1;
+              const peerStr = peers >= 0 ? ` · ${peers} peer${peers === 1 ? "" : "s"}` : "";
+              const isTorrent = job.accountId === "torrent";
+              return isTorrent && job.totalBytes <= 0 ? (
+                <span className="text-[var(--acc)]">Connecting…{peerStr}</span>
+              ) : (
+                <>
+                  {formatBytes(job.bytes)} / {formatBytes(job.totalBytes || job.bytes)}
+                  {job.speed > 0 ? ` · ${formatSpeed(job.speed)}` : ""}
+                  {job.eta != null ? ` · ${formatEta(job.eta)} left` : ""}
+                  {isTorrent ? peerStr : ""}
+                </>
+              );
+            })()
           ) : job.cancelled ? (
             <span className="text-[var(--faint)]">Cancelled</span>
           ) : failed ? (

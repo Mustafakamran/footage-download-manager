@@ -116,9 +116,15 @@ const BLOCK_LABEL: Record<string, string> = {
   unknown: "Needs attention",
 };
 
+/** A torrent that hasn't resolved its metadata yet (no size, still finding peers). */
+const isConnectingTorrent = (r: TransferRow) => r.accountId === "torrent" && r.size <= 0;
+
 function stateLabel(r: TransferRow): string {
   switch (r.state) {
-    case "downloading": return `Downloading ${r.pct}%`;
+    case "downloading":
+      return isConnectingTorrent(r)
+        ? (r.peers && r.peers > 0 ? `Connecting… ${r.peers} peers` : "Connecting…")
+        : `Downloading ${r.pct}%`;
     case "uploading": return `Uploading ${r.pct}%`;
     case "queued": return "Queued";
     case "paused": return `Paused ${r.pct}%`;
@@ -304,6 +310,7 @@ function InfoPanel({ row, samples, stats }: { row: TransferRow; samples: number[
           <Stat label="Size" value={formatBytes(row.size)} />
           <Stat label="Downloaded" value={formatBytes(downloaded)} />
           <Stat label="Remaining" value={completed ? "0 B" : formatBytes(remaining)} />
+          {row.accountId === "torrent" && <Stat label="Peers" value={row.peers != null && row.peers >= 0 ? String(row.peers) : "·"} color={row.peers && row.peers > 0 ? "var(--dl)" : undefined} />}
           <Stat label="Speed" value={active ? formatSpeed(row.speed) : "·"} color={active && row.speed > 0 ? "var(--dl)" : undefined} />
           <Stat label="ETA" value={active ? formatEta(row.eta) : completed ? "Done" : "·"} />
           <Stat label="Avg speed" value={avg ? formatSpeed(avg) : "·"} />

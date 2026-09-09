@@ -890,6 +890,7 @@ fn download_torrent(app: &AppHandle, item: &DownloadItem, dest: &str, h: &Native
             h.total.store(s.total, Ordering::SeqCst);
         }
         h.transferred.store(s.progress.max(0), Ordering::SeqCst);
+        h.peers.store(s.peers, Ordering::SeqCst);
         if let Some(err) = s.error {
             crate::torrent::forget(&base, id);
             return Err(err);

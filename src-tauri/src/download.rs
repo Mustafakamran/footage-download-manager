@@ -79,6 +79,8 @@ pub struct NativeHandles {
     pub success: Arc<AtomicBool>,
     pub cancelled: Arc<AtomicBool>,
     pub error: Arc<Mutex<String>>,
+    /// Live peer count for torrent jobs (-1 = not a torrent / no live session yet).
+    pub peers: Arc<AtomicI64>,
 }
 
 /// Minimum gap between speed samples; below this we reuse the last reading so a
@@ -167,6 +169,7 @@ impl NativeJobsState {
             success: Arc::new(AtomicBool::new(false)),
             cancelled: Arc::new(AtomicBool::new(false)),
             error: Arc::new(Mutex::new(String::new())),
+            peers: Arc::new(AtomicI64::new(-1)),
         };
         self.jobs
             .lock()
@@ -207,6 +210,8 @@ pub struct JobStatus {
     pub error: String,
     /// "download" or "upload" — lets the frontend split the shared job poll.
     pub kind: &'static str,
+    /// Live peer count for torrents (-1 = not a torrent / not yet peering).
+    pub peers: i64,
 }
 
 /// rclone connection string for an account id (provider derived from prefix).
@@ -429,6 +434,7 @@ fn status_for(job_id: i64, account_id: &str, name: &str, dest: &str, total: i64,
         cancelled: false,
         error: String::new(),
         kind,
+        peers: -1,
     }
 }
 
@@ -468,6 +474,7 @@ fn native_status(job: &NativeJob) -> JobStatus {
         cancelled,
         error: h.error.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         kind: "download",
+        peers: h.peers.load(Ordering::SeqCst),
     }
 }
 

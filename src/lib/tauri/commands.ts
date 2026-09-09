@@ -87,6 +87,8 @@ export interface JobStatus {
   error: string;
   /** "download" | "upload" — both flow through the same poll; the UI splits them. */
   kind: "download" | "upload";
+  /** Live connected-peer count for torrents (-1 = not a torrent / not yet peering). */
+  peers?: number;
 }
 
 /** Start downloads for the selected items into `dest`; returns the new jobs. */

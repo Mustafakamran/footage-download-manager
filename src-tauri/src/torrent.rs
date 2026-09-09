@@ -58,10 +58,11 @@ impl TorrentState {
             .args([
                 "--http-api-listen-addr".to_string(),
                 format!("127.0.0.1:{port}"),
-                // No router UPnP; don't persist DHT state (avoids port clashes and
-                // keeps the app's footprint clean between runs).
+                // No router UPnP (keeps startup quick and avoids gateway prompts).
+                // DHT persistence is left ON: rqbit caches its routing table between
+                // runs, so peer discovery for magnets is fast on the next launch
+                // instead of a cold DHT bootstrap every time.
                 "--disable-upnp-port-forward".to_string(),
-                "--disable-dht-persistence".to_string(),
                 "server".to_string(),
                 "start".to_string(),
                 dir.to_string_lossy().into_owned(),
@@ -166,6 +167,9 @@ pub struct TStats {
     pub progress: i64,
     pub finished: bool,
     pub error: Option<String>,
+    /// Live (connected) peer count, from rqbit's `live.snapshot.peer_stats.live`.
+    /// -1 while there is no live session yet (still resolving metadata).
+    pub peers: i64,
 }
 
 pub fn stats(base: &str, id: i64) -> Result<TStats, String> {
@@ -175,11 +179,19 @@ pub fn stats(base: &str, id: i64) -> Result<TStats, String> {
         .map_err(|e| e.to_string())?
         .json()
         .map_err(|e| e.to_string())?;
+    let peers = v
+        .get("live")
+        .and_then(|l| l.get("snapshot"))
+        .and_then(|s| s.get("peer_stats"))
+        .and_then(|p| p.get("live"))
+        .and_then(|x| x.as_i64())
+        .unwrap_or(-1);
     Ok(TStats {
         total: v.get("total_bytes").and_then(|x| x.as_i64()).unwrap_or(0),
         progress: v.get("progress_bytes").and_then(|x| x.as_i64()).unwrap_or(0),
         finished: v.get("finished").and_then(|x| x.as_bool()).unwrap_or(false),
         error: v.get("error").and_then(|x| x.as_str()).filter(|s| !s.is_empty()).map(|s| s.to_string()),
+        peers,
     })
 }
 
