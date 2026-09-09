@@ -1,12 +1,23 @@
 import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import { AppShell } from "./components/AppShell";
 import { useApp } from "./store/app";
 import { useUpdater } from "./store/updater";
 import { useToasts } from "./store/toast";
 import { useTransfers } from "./store/transfers";
 import { startWatching, stopWatching } from "./lib/watcher";
-import { startIngestListener } from "./lib/ingest";
+import { startIngestListener, resolveDest } from "./lib/ingest";
+
+/** Queue a magnet link (from the OS handler) into the default download folder. */
+async function queueMagnet(url: string) {
+  const m = url.trim();
+  if (!m.toLowerCase().startsWith("magnet:")) return;
+  const dest = await resolveDest();
+  if (!dest) { useToasts.getState().push("Set a download folder in Settings first", "error"); return; }
+  useTransfers.getState().enqueueUrl(m, dest);
+  useToasts.getState().push("Queued torrent", "success");
+}
 
 /** Re-check for an OTA update on this cadence so a release pushed while the app
  *  is open surfaces on its own (not just at launch / on a manual check). */
@@ -42,6 +53,10 @@ export default function App() {
     const hiddenUnlisten = listen("app-hidden", () => {
       document.querySelectorAll<HTMLMediaElement>("video, audio").forEach((el) => el.pause());
     });
+    // Magnet links opened from the OS (FDM registered as the magnet: handler):
+    // drain any captured at launch, then listen for live ones.
+    void invoke<string[]>("take_pending_magnets").then((urls) => urls?.forEach((u) => void queueMagnet(u))).catch(() => {});
+    const magnetUnlisten = listen<string>("open-magnet", (ev) => void queueMagnet(ev.payload));
     // Check for an OTA update shortly after launch (silent if none / no runtime),
     // then on an interval so a release pushed while the app is open is noticed.
     const launch = setTimeout(() => void useUpdater.getState().check(), 3000);
@@ -53,6 +68,7 @@ export default function App() {
       stopIngest();
       void readyUnlisten.then((un) => un());
       void hiddenUnlisten.then((un) => un());
+      void magnetUnlisten.then((un) => un());
     };
   }, [loadAccounts]);
 

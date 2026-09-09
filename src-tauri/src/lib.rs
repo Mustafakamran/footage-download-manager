@@ -26,6 +26,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager};
+use tauri_plugin_deep_link::DeepLinkExt;
 
 /// True once the user has chosen to really quit (tray "Quit" or Settings →
 /// Quit). Closing the window normally only HIDES it (downloads keep running);
@@ -61,6 +62,32 @@ fn shutdown_cleanup(app: &tauri::AppHandle) {
     stop_rclone(&app.state::<RcloneState>());
     app.state::<torrent::TorrentState>().stop();
     hls::cleanup(app);
+}
+
+/// Magnet links received via the OS handler before the frontend is ready to take
+/// them. Buffered here and drained by `take_pending_magnets` on first mount; live
+/// links (app already running) also arrive as an `open-magnet` event.
+#[derive(Default)]
+struct PendingMagnets(std::sync::Mutex<Vec<String>>);
+
+/// Route an incoming deep-link URL: keep only magnets, reveal the window, buffer
+/// it for a cold-launch drain, and emit `open-magnet` for a running frontend.
+fn handle_magnet(app: &tauri::AppHandle, url: &str) {
+    let url = url.trim();
+    if !url.to_lowercase().starts_with("magnet:") {
+        return; // FDM only claims magnet: links
+    }
+    show_main_window(app);
+    if let Ok(mut buf) = app.state::<PendingMagnets>().0.lock() {
+        buf.push(url.to_string());
+    }
+    let _ = app.emit("open-magnet", url.to_string());
+}
+
+/// Drain any magnet links captured before the frontend was listening.
+#[tauri::command]
+fn take_pending_magnets(state: tauri::State<PendingMagnets>) -> Vec<String> {
+    state.0.lock().map(|mut b| std::mem::take(&mut *b)).unwrap_or_default()
 }
 
 /// Reveal + focus the main window (from the tray icon / its menu / Dock).
@@ -179,9 +206,17 @@ pub fn run() {
     tauri::Builder::default()
         // MUST be registered first: it intercepts a second launch before the
         // rest of the app (and a second rclone daemon) can start.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             show_main_window(app);
+            // Windows/Linux deliver a magnet click to the running instance as a
+            // command-line arg on the second launch; forward it.
+            for a in &args {
+                if a.to_lowercase().starts_with("magnet:") {
+                    handle_magnet(app, a);
+                }
+            }
         }))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
@@ -199,6 +234,7 @@ pub fn run() {
         .manage(Revealed::default())
         .manage(RcloneState::default())
         .manage(torrent::TorrentState::default())
+        .manage(PendingMagnets::default())
         .manage(JobsState::default())
         .manage(NativeJobsState::default())
         .manage(accounts::OAuthState::default())
@@ -208,6 +244,7 @@ pub fn run() {
         .manage(bdm::BdmState::default())
         .manage(speedtest::SpeedTestState::default())
         .invoke_handler(tauri::generate_handler![
+            take_pending_magnets,
             rc_call,
             quit_app,
             start_hidden,
@@ -261,6 +298,22 @@ pub fn run() {
             speedtest::cancel_speed_test,
         ])
         .setup(|app| {
+            // Magnet deep links (macOS delivers them via an Apple event to the
+            // running or launching process; a cold-launch URL is read here too).
+            {
+                let h = app.handle().clone();
+                app.deep_link().on_open_url(move |event| {
+                    for url in event.urls() {
+                        handle_magnet(&h, url.as_str());
+                    }
+                });
+                if let Ok(Some(urls)) = app.deep_link().get_current() {
+                    for url in urls {
+                        handle_magnet(app.handle(), url.as_str());
+                    }
+                }
+            }
+
             // Window chrome: macOS keeps the native title bar (Overlay style →
             // traffic lights float over the content, configured in tauri.conf).
             // Windows/Linux get our in-app controls instead, so strip the native

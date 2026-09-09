@@ -31,10 +31,22 @@ struct Engine {
 
 impl TorrentState {
     /// Return the API base URL, spawning rqbit on first use.
+    ///
+    /// The cached engine is re-validated on every call: rqbit can die between
+    /// torrents (crash, OOM, a killed child), and a stale cached base would then
+    /// make every add/stats fail with "error sending request" — and the graceful
+    /// retry would loop forever against a dead port. So if the API no longer
+    /// answers, we drop the corpse and respawn a fresh sidecar.
     pub fn ensure(&self, app: &AppHandle) -> Result<String, String> {
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(e) = guard.as_ref() {
-            return Ok(e.base.clone());
+            if alive(&e.base) {
+                return Ok(e.base.clone());
+            }
+            // Dead sidecar — reap it and fall through to a fresh spawn.
+            if let Some(old) = guard.take() {
+                let _ = old.child.kill();
+            }
         }
         let port = free_port()?;
         let dir = default_dir(app);
@@ -81,6 +93,16 @@ impl TorrentState {
             let _ = e.child.kill();
         }
     }
+}
+
+/// Quick liveness probe for a running rqbit API (short timeout: a dead port
+/// refuses instantly, but a hung one shouldn't stall the whole add).
+fn alive(base: &str) -> bool {
+    reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .map(|c| c.get(format!("{base}/torrents")).send().map(|r| r.status().is_success()).unwrap_or(false))
+        .unwrap_or(false)
 }
 
 fn free_port() -> Result<u16, String> {

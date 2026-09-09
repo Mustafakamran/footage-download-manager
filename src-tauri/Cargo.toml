@@ -1,6 +1,6 @@
 [package]
 name = "google-drive-downloader"
-version = "2.8.6"
+version = "2.8.7"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -27,6 +27,9 @@ tauri-plugin-autostart = "2"
 # while the app is hidden in the tray) focuses the running window instead of
 # spawning a duplicate process + duplicate rclone daemon.
 tauri-plugin-single-instance = "2"
+# Deep links: register FDM as the OS handler for magnet: links so clicking a
+# magnet in a browser opens FDM and queues the torrent.
+tauri-plugin-deep-link = "2"
 rand = "0.10.1"
 # rustls-tls is required for the external HTTPS calls (Google/Dropbox token +
 # API endpoints); loopback rc calls are plain HTTP but need a TLS backend present.
